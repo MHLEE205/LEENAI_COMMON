@@ -1,7 +1,8 @@
-/* LEENAI_COMMON v1.1 (2026-10-07) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.2 (2026-10-07) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
-              v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字 */
+              v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
+              v1.2 — バージョン番号修正 (v1.1 → v1.2) */
 (function(){
 'use strict';
 
@@ -317,7 +318,7 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.1',
+  VERSION:'v1.2',
   _toggleTheme:_toggleTheme,
 };
 })();
