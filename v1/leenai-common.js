@@ -1,6 +1,7 @@
-/* LEENAI_COMMON v1.0 (2026-10-07) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.1 (2026-10-07) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
-   ChangeLog: v1.0 — 新規 */
+   ChangeLog: v1.0 — 新規
+              v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字 */
 (function(){
 'use strict';
 
@@ -14,13 +15,13 @@ const THEMES = ['dark','light','leenai','focus'];
 const THEME_LABEL = {dark:'🌙 ダーク',light:'☀️ ライト',leenai:'🌿 LEENAI',focus:'🎯 FOCUS'};
 
 const DEFAULT_STAFF = [
-  {name:'LEE MYEONGHOE', email:'mh_lee@leenearcorp.com', staffCode:'MH'},
-  {name:'KAIXIN ZHAN',   email:'kx_zhan@leenearcorp.com', staffCode:'KZ'},
-  {name:'HINA SUZUKI',   email:'h_suzuki@leenearcorp.com', staffCode:'HS'},
-  {name:'YUKI TANAKA',   email:'y_tanaka@leenearcorp.com', staffCode:'YT'},
-  {name:'TAKESHI MORI',  email:'t_mori@leenearcorp.com',  staffCode:'TM'},
-  {name:'SAKURA ITO',    email:'s_ito@leenearcorp.com',   staffCode:'SI'},
-  {name:'KENJI NAKAMURA',email:'k_nakamura@leenearcorp.com',staffCode:'KN'},
+  {name:'LEE MYEONGHOE', email:'mh_lee@leenearcorp.com',      staffCode:'MH_LEE'},
+  {name:'KAIXIN ZHAN',   email:'kx_zhan@leenearcorp.com',     staffCode:'KX_ZHAN'},
+  {name:'HINA SUZUKI',   email:'h_suzuki@leenearcorp.com',    staffCode:'H_SUZUKI'},
+  {name:'YUKI TANAKA',   email:'y_tanaka@leenearcorp.com',    staffCode:'Y_TANAKA'},
+  {name:'TAKESHI MORI',  email:'t_mori@leenearcorp.com',      staffCode:'T_MORI'},
+  {name:'SAKURA ITO',    email:'s_ito@leenearcorp.com',       staffCode:'S_ITO'},
+  {name:'KENJI NAKAMURA',email:'k_nakamura@leenearcorp.com',  staffCode:'K_NAKAMURA'},
 ];
 
 /* ── 内部ステート ── */
@@ -183,11 +184,13 @@ async function _handleCallback(){
     _dvToken=t1.access_token; _dvExpiry=Date.now()+(t1.expires_in-60)*1000;
     _authStatus.dataverse='ok';
     try{
-      const payload=JSON.parse(atob(t1.id_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+      const _raw=t1.id_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
+      const _bytes=Uint8Array.from(atob(_raw),function(c){return c.charCodeAt(0);});
+      const payload=JSON.parse(new TextDecoder().decode(_bytes));
       const email=payload.preferred_username||payload.email||'';
       const staff=DEFAULT_STAFF.find(function(s){return s.email.toLowerCase()===email.toLowerCase();});
       const initials=(payload.name||'').split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase()||'??';
-      _user={name:payload.name||email,email:email,staffCode:staff?staff.staffCode:initials,initials:initials};
+      _user={name:payload.name||email,email:email,staffCode:staff?staff.staffCode:'',initials:initials};
     }catch(e){_user={name:'(不明)',email:'',staffCode:'??',initials:'??'};}
     if(_cfg.needGraph!==false){
       try{
@@ -314,7 +317,7 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.0',
+  VERSION:'v1.1',
   _toggleTheme:_toggleTheme,
 };
 })();
