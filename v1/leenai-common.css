@@ -1,0 +1,77 @@
+/* LEENAI_COMMON v1.0 (2026-10-07) — DOC-Z-05 v1.0
+   全 TOOL が読み込む共通 CSS。v1/ は破壊的変更禁止。変更は v2/ 以降。
+   ChangeLog: v1.0 — 新規 */
+
+/* ===== 4 テーマ トークン ===== */
+:root{
+  --bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--surface3:#2a2f46;--border:#2e3350;
+  --text:#e2e8f0;--text2:#aab3c4;--text3:#8f98ab;
+  --accent:#5b9bff;--accent2:#5b9bff;--accent-btn:#2f6fd8;
+  --read:#0f1117;--frame:#1a1d27;
+  --ok:#22c55e;--warn:#f59e0b;--danger:#f87171;--info:#38bdf8;
+  --font:'Segoe UI','Noto Sans JP',sans-serif;
+  --mono:'Consolas','Menlo',monospace;
+}
+[data-theme="light"]{--bg:#FAF9F8;--surface:#FFFFFF;--surface2:#F3F2F1;--surface3:#EDEBE9;--border:#E1DFDD;--text:#201F1E;--text2:#3B3A39;--text3:#5F5D5B;--accent:#0F6CBD;--accent2:#0F6CBD;--accent-btn:#0F6CBD;--read:#FFFFFF;--frame:#FAF9F8;--ok:#166534;--warn:#92400e;--danger:#b91c1c;--info:#0369a1}
+[data-theme="leenai"]{--bg:#DCEBD8;--surface:#F0F5EF;--surface2:#D4E8D0;--surface3:#C5DCC0;--border:#A8C8A3;--text:#1F2A22;--text2:#2E4032;--text3:#45574B;--accent:#25573A;--accent2:#3F6FA8;--accent-btn:#2F6B45;--read:#F0F5EF;--frame:#DCEBD8;--ok:#166534;--warn:#92400e;--danger:#991b1b;--info:#075985}
+[data-theme="focus"]{--bg:#D8DDE8;--surface:#EDF0F5;--surface2:#CDD4E0;--surface3:#BEC8D6;--border:#9DAABE;--text:#202733;--text2:#2E3A4A;--text3:#3F4D5E;--accent:#284F86;--accent2:#2F7D6A;--accent-btn:#315F9E;--read:#EDF0F5;--frame:#D8DDE8;--ok:#14532d;--warn:#7c2d12;--danger:#991b1b;--info:#0c4a6e}
+
+/* ===== 共通リセット ===== */
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--frame);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.6;transition:background .2s,color .2s}
+
+/* ===== ロゴ・バッジ ===== */
+.ln-logo{font-weight:800;letter-spacing:1.5px;color:var(--text);white-space:nowrap}
+.ln-logo span{color:var(--accent)}
+.ln-sys{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:1px 7px;letter-spacing:.5px}
+
+/* ===== 第一画面 ===== */
+.ln-splash{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 20px}
+.ln-splash-card{width:100%;max-width:420px;background:var(--read);border:1px solid var(--border);border-radius:14px;padding:36px 32px 28px;text-align:center}
+.ln-splash .ln-logo{font-size:34px;letter-spacing:4px}
+.ln-splash-meta{margin-top:18px;display:flex;justify-content:center;align-items:center;gap:8px}
+.ln-splash-ver{font-family:var(--mono);font-size:12px;color:var(--text2)}
+.ln-splash-name{margin-top:10px;font-size:18px;font-weight:700}
+.ln-splash-desc{margin-top:6px;font-size:12.5px;color:var(--text2)}
+.ln-splash hr{border:0;border-top:1px solid var(--border);margin:24px 0 20px}
+.ln-login-btn{width:100%;display:flex;align-items:center;justify-content:center;gap:10px;background:var(--accent-btn);color:#fff;border:0;border-radius:8px;padding:12px 16px;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer}
+.ln-login-btn:hover{filter:brightness(1.08)}
+.ln-ms{display:grid;grid-template-columns:7px 7px;gap:2px}
+.ln-ms i{width:7px;height:7px;display:block}
+.ln-login-note{margin-top:10px;font-size:11.5px;color:var(--text3)}
+.ln-splash-theme{margin-top:18px}
+
+/* ===== 共通ヘッダー ===== */
+.ln-header{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:12px;background:var(--frame);border-bottom:1px solid var(--border);padding:10px 20px}
+.ln-header .ln-logo{font-size:17px}
+.ln-hdr-sep{width:1px;height:20px;background:var(--border)}
+.ln-hdr-name{font-weight:700;font-size:14px}
+.ln-hdr-ver{font-family:var(--mono);font-size:12px;color:var(--text2)}
+.ln-hdr-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.ln-user{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px 10px 3px 4px}
+.ln-avatar{width:20px;height:20px;border-radius:50%;background:var(--accent-btn);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.ln-dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.ln-btn-ghost{background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:4px 12px;font-family:var(--font);font-size:12px;color:var(--text);cursor:pointer}
+
+/* ===== ローディングオーバーレイ ===== */
+.ln-loading{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);align-items:center;justify-content:center;flex-direction:column;gap:14px}
+.ln-loading.ln-active{display:flex}
+.ln-loading-msg{color:#fff;font-size:14px}
+.ln-spinner{width:36px;height:36px;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:ln-spin .7s linear infinite}
+@keyframes ln-spin{to{transform:rotate(360deg)}}
+
+/* ===== トースト ===== */
+.ln-toast-wrap{position:fixed;bottom:24px;right:24px;z-index:300;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.ln-toast{pointer-events:auto;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600;color:#fff;opacity:0;transform:translateY(10px);transition:opacity .25s,transform .25s;max-width:340px}
+.ln-toast.ln-in{opacity:1;transform:none}
+.ln-toast.ln-ok{background:var(--ok)}
+.ln-toast.ln-warn{background:var(--warn)}
+.ln-toast.ln-danger{background:var(--danger)}
+.ln-toast.ln-info{background:var(--info)}
+
+/* ===== 共通フッター ===== */
+.ln-footer{text-align:center;font-size:10.5px;color:var(--text3);padding:18px 0 22px;letter-spacing:.4px}
+
+/* ===== 印刷 ===== */
+@media print{.ln-header,.ln-footer,.ln-toast-wrap,.ln-loading{display:none!important}}
