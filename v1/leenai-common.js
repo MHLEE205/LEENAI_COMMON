@@ -1,8 +1,9 @@
-/* LEENAI_COMMON v1.2 (2026-10-07) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.3 (2026-10-07) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
               v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
-              v1.2 — バージョン番号修正 (v1.1 → v1.2) */
+              v1.2 — バージョン番号修正 (v1.1 → v1.2)
+              v1.3 — refresh_token 保管・自動更新実装, 並行リフレッシュ排他, _expireForTest(?debug=1) */
 (function(){
 'use strict';
 
@@ -10,7 +11,7 @@
 const CLIENT_ID = 'f071a165-5e9b-44bf-b6a1-baba654524db';
 const TENANT_ID = 'a56988ff-c2b8-4df8-9727-889ad4205198';
 const DV_URL    = 'https://orgde512c6f.crm7.dynamics.com';
-const AUTH_URL  = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0`;
+const AUTH_URL  = 'https://login.microsoftonline.com/'+TENANT_ID+'/oauth2/v2.0';
 
 const THEMES = ['dark','light','leenai','focus'];
 const THEME_LABEL = {dark:'🌙 ダーク',light:'☀️ ライト',leenai:'🌿 LEENAI',focus:'🎯 FOCUS'};
@@ -29,42 +30,45 @@ const DEFAULT_STAFF = [
 let _cfg = {};
 let _dvToken = null, _dvExpiry = 0;
 let _grToken = null, _grExpiry = 0;
+let _refreshToken = null;       // メモリのみ保管
+let _dvRefreshPromise = null;   // 並行リフレッシュ排他用
+let _grRefreshPromise = null;
 let _user = null;
 let _authStatus = {dataverse:'error', graph:'skip', graphError:''};
 let _headerBtns = [];
 
 /* ── ユーティリティ ── */
-function b64url(buf){return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');}
+function b64url(buf){return btoa(String.fromCharCode.apply(null,new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');}
 async function sha256(s){return b64url(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s)));}
-function randomStr(n){const a='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';return Array.from(crypto.getRandomValues(new Uint8Array(n)),v=>a[v%a.length]).join('');}
+function randomStr(n){var a='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';return Array.from(crypto.getRandomValues(new Uint8Array(n)),function(v){return a[v%a.length];}).join('');}
 
 /* ── テーマ ── */
 function _applyTheme(t){
   document.documentElement.setAttribute('data-theme',t);
-  document.querySelectorAll('[data-ln="themeBtn"]').forEach(b=>b.textContent=THEME_LABEL[t]);
+  document.querySelectorAll('[data-ln="themeBtn"]').forEach(function(b){b.textContent=THEME_LABEL[t];});
   _setFavicon();
 }
 function _toggleTheme(){
-  const cur=document.documentElement.getAttribute('data-theme')||'dark';
-  const next=THEMES[(THEMES.indexOf(cur)+1)%THEMES.length];
+  var cur=document.documentElement.getAttribute('data-theme')||'dark';
+  var next=THEMES[(THEMES.indexOf(cur)+1)%THEMES.length];
   try{localStorage.setItem('leenai_theme',next);}catch(e){}
   _applyTheme(next);
 }
 function _setFavicon(){
-  const acc=(getComputedStyle(document.documentElement).getPropertyValue('--accent')||'#4f8ef7').trim();
-  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0f1117"/><text x="16" y="22" font-family="Segoe UI,Arial" font-size="15" font-weight="800" text-anchor="middle" fill="#e2e8f0">L<tspan fill="${acc}">A</tspan></text></svg>`;
-  let el=document.getElementById('leenaiFavicon');
+  var acc=(getComputedStyle(document.documentElement).getPropertyValue('--accent')||'#4f8ef7').trim();
+  var svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0f1117"/><text x="16" y="22" font-family="Segoe UI,Arial" font-size="15" font-weight="800" text-anchor="middle" fill="#e2e8f0">L<tspan fill="'+acc+'">A</tspan></text></svg>';
+  var el=document.getElementById('leenaiFavicon');
   if(!el){el=document.createElement('link');el.rel='icon';el.id='leenaiFavicon';document.head.appendChild(el);}
   el.href='data:image/svg+xml,'+encodeURIComponent(svg);
 }
 
 /* ── ローディング ── */
-let _loadEl=null, _loadMsgEl=null;
+var _loadEl=null, _loadMsgEl=null;
 function _ensureLoading(){
   if(_loadEl) return;
   _loadEl=document.createElement('div'); _loadEl.className='ln-loading';
   _loadMsgEl=document.createElement('div'); _loadMsgEl.className='ln-loading-msg';
-  const sp=document.createElement('div'); sp.className='ln-spinner';
+  var sp=document.createElement('div'); sp.className='ln-spinner';
   _loadEl.appendChild(sp); _loadEl.appendChild(_loadMsgEl);
   document.body.appendChild(_loadEl);
 }
@@ -73,7 +77,7 @@ function _updateLoading(msg){if(_loadMsgEl)_loadMsgEl.textContent=msg;}
 function _hideLoading(){if(_loadEl)_loadEl.classList.remove('ln-active');}
 
 /* ── トースト ── */
-let _toastWrap=null;
+var _toastWrap=null;
 function _ensureToast(){
   if(_toastWrap) return;
   _toastWrap=document.createElement('div'); _toastWrap.className='ln-toast-wrap';
@@ -82,7 +86,7 @@ function _ensureToast(){
 function _toast(msg, type){
   type=type||'info';
   _ensureToast();
-  const el=document.createElement('div'); el.className=`ln-toast ln-${type}`; el.textContent=msg;
+  var el=document.createElement('div'); el.className='ln-toast ln-'+type; el.textContent=msg;
   _toastWrap.appendChild(el);
   requestAnimationFrame(function(){requestAnimationFrame(function(){el.classList.add('ln-in');});});
   setTimeout(function(){el.classList.remove('ln-in');setTimeout(function(){el.remove();},300);},3500);
@@ -90,7 +94,7 @@ function _toast(msg, type){
 
 /* ── DOM 構築 ── */
 function _buildSplash(){
-  const d=document.createElement('div'); d.id='ln-splash'; d.className='ln-splash';
+  var d=document.createElement('div'); d.id='ln-splash'; d.className='ln-splash';
   d.innerHTML='<div class="ln-splash-card">'
     +'<div class="ln-logo">LEEN<span>AI</span></div>'
     +'<div class="ln-splash-meta">'
@@ -107,13 +111,13 @@ function _buildSplash(){
     +'<div class="ln-login-note">COMPASS と Outlook に同時にサインインします</div>'
     +'<div class="ln-splash-theme"><button class="ln-btn-ghost" data-ln="themeBtn" onclick="LEENAI._toggleTheme()">🌙 ダーク</button></div>'
     +'</div>'
-    +'<div class="ln-footer">❆ Powered by LEENAI Automation System</div>';
+    +'<div class="ln-footer">✦ Powered by LEENAI Automation System</div>';
   document.body.insertBefore(d, document.body.firstChild);
   document.getElementById('ln-login-btn').addEventListener('click', _startLogin);
 }
 
 function _buildHeader(){
-  const h=document.createElement('header'); h.className='ln-header'; h.id='ln-header';
+  var h=document.createElement('header'); h.className='ln-header'; h.id='ln-header';
   h.innerHTML='<div class="ln-logo">LEEN<span>AI</span></div>'
     +'<span class="ln-sys">'+_cfg.sys+'</span>'
     +'<div class="ln-hdr-sep"></div>'
@@ -133,15 +137,15 @@ function _buildHeader(){
 }
 
 function _buildFooter(){
-  const f=document.createElement('div'); f.className='ln-footer';
-  f.textContent='❆ Powered by LEENAI Automation System';
+  var f=document.createElement('div'); f.className='ln-footer';
+  f.textContent='✦ Powered by LEENAI Automation System';
   return f;
 }
 
 /* ── ヘッダードット更新 ── */
 function _updateDot(){
-  const dot=document.getElementById('ln-dot'); if(!dot) return;
-  const s=_authStatus;
+  var dot=document.getElementById('ln-dot'); if(!dot) return;
+  var s=_authStatus;
   if(s.dataverse==='ok'&&(s.graph==='ok'||s.graph==='skip')) dot.style.background='var(--ok)';
   else if(s.dataverse==='ok'&&s.graph==='error') dot.style.background='var(--warn)';
   else dot.style.background='var(--danger)';
@@ -149,24 +153,24 @@ function _updateDot(){
 
 /* ── ログイン (PKCE) ── */
 async function _startLogin(){
-  const verifier=randomStr(64);
-  const challenge=await sha256(verifier);
-  const state=randomStr(32);
-  const pkceKey='leenai_pkce_'+_cfg.sys;
-  try{sessionStorage.setItem(pkceKey,JSON.stringify({verifier,state}));}catch(e){}
-  const rdUri=location.origin+location.pathname.replace(/index\.html$/,'');
-  const scope=encodeURIComponent(DV_URL+'/user_impersonation openid profile email offline_access');
-  const params='client_id='+CLIENT_ID+'&response_type=code&redirect_uri='+encodeURIComponent(rdUri)+'&scope='+scope+'&code_challenge='+challenge+'&code_challenge_method=S256&state='+state+'&prompt=select_account';
+  var verifier=randomStr(64);
+  var challenge=await sha256(verifier);
+  var state=randomStr(32);
+  var pkceKey='leenai_pkce_'+_cfg.sys;
+  try{sessionStorage.setItem(pkceKey,JSON.stringify({verifier:verifier,state:state}));}catch(e){}
+  var rdUri=location.origin+location.pathname.replace(/index\.html$/,'');
+  var scope=encodeURIComponent(DV_URL+'/user_impersonation openid profile email offline_access');
+  var params='client_id='+CLIENT_ID+'&response_type=code&redirect_uri='+encodeURIComponent(rdUri)+'&scope='+scope+'&code_challenge='+challenge+'&code_challenge_method=S256&state='+state+'&prompt=select_account';
   location.href=AUTH_URL+'/authorize?'+params;
 }
 
 async function _handleCallback(){
-  const url=new URL(location.href);
-  const code=url.searchParams.get('code');
-  const retState=url.searchParams.get('state');
+  var url=new URL(location.href);
+  var code=url.searchParams.get('code');
+  var retState=url.searchParams.get('state');
   if(!code) return false;
-  const pkceKey='leenai_pkce_'+_cfg.sys;
-  let pkce;
+  var pkceKey='leenai_pkce_'+_cfg.sys;
+  var pkce;
   try{pkce=JSON.parse(sessionStorage.getItem(pkceKey)||'null');}catch(e){}
   sessionStorage.removeItem(pkceKey);
   if(!pkce||pkce.state!==retState){
@@ -175,32 +179,37 @@ async function _handleCallback(){
     return false;
   }
   history.replaceState({},'',location.pathname);
-  const rdUri=location.origin+location.pathname.replace(/index\.html$/,'');
+  var rdUri=location.origin+location.pathname.replace(/index\.html$/,'');
   _showLoading('認証中…');
   try{
-    const r1=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    /* ── Step1: DV トークン取得 ── */
+    var r1=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
       body:'client_id='+CLIENT_ID+'&grant_type=authorization_code&code='+encodeURIComponent(code)+'&redirect_uri='+encodeURIComponent(rdUri)+'&code_verifier='+pkce.verifier+'&scope='+encodeURIComponent(DV_URL+'/user_impersonation openid profile email offline_access')});
     if(!r1.ok) throw new Error('DV token '+r1.status);
-    const t1=await r1.json();
+    var t1=await r1.json();
     _dvToken=t1.access_token; _dvExpiry=Date.now()+(t1.expires_in-60)*1000;
+    _refreshToken=t1.refresh_token||null;   // ① refresh_token 保管
     _authStatus.dataverse='ok';
+    /* ── id_token → user (UTF-8デコード) ── */
     try{
-      const _raw=t1.id_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
-      const _bytes=Uint8Array.from(atob(_raw),function(c){return c.charCodeAt(0);});
-      const payload=JSON.parse(new TextDecoder().decode(_bytes));
-      const email=payload.preferred_username||payload.email||'';
-      const staff=DEFAULT_STAFF.find(function(s){return s.email.toLowerCase()===email.toLowerCase();});
-      const initials=(payload.name||'').split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase()||'??';
+      var _raw=t1.id_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
+      var _bytes=Uint8Array.from(atob(_raw),function(c){return c.charCodeAt(0);});
+      var payload=JSON.parse(new TextDecoder().decode(_bytes));
+      var email=payload.preferred_username||payload.email||'';
+      var staff=DEFAULT_STAFF.find(function(s){return s.email.toLowerCase()===email.toLowerCase();});
+      var initials=(payload.name||'').split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase()||'??';
       _user={name:payload.name||email,email:email,staffCode:staff?staff.staffCode:'',initials:initials};
-    }catch(e){_user={name:'(不明)',email:'',staffCode:'??',initials:'??'};}
+    }catch(e){_user={name:'(不明)',email:'',staffCode:'',initials:'??'};}
+    /* ── Step2: Graph トークン取得 ── */
     if(_cfg.needGraph!==false){
       try{
         _updateLoading('Outlook 接続中…');
-        const r2=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
-          body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(t1.refresh_token)+'&scope='+encodeURIComponent('https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read offline_access')});
-        if(!r2.ok){const e=await r2.json();throw Object.assign(new Error(r2.status),{code:e.error});}
-        const t2=await r2.json();
+        var r2=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+          body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent('https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read offline_access')});
+        if(!r2.ok){var ej=await r2.json();throw Object.assign(new Error(r2.status),{code:ej.error});}
+        var t2=await r2.json();
         _grToken=t2.access_token; _grExpiry=Date.now()+(t2.expires_in-60)*1000;
+        if(t2.refresh_token) _refreshToken=t2.refresh_token;  // ① 新 refresh_token が来たら更新
         _authStatus.graph='ok'; _authStatus.graphError='';
       }catch(e){
         _authStatus.graph='error'; _authStatus.graphError=e.code||String(e);
@@ -214,41 +223,123 @@ async function _handleCallback(){
   }
 }
 
+/* ── トークン自動更新 ── */
+async function _getToken(type){
+  if(type==='dataverse'){
+    /* キャッシュ有効ならそのまま返す */
+    if(_dvToken&&Date.now()<_dvExpiry) return _dvToken;
+    /* refresh_token がない → 再ログイン */
+    if(!_refreshToken){
+      _toast('セッションが切れました。再ログインしてください。','warn');
+      setTimeout(function(){_showSplash();},2000);
+      throw new Error('session expired');
+    }
+    /* ④ 並行リフレッシュ排他: 進行中のPromiseを共有 */
+    if(!_dvRefreshPromise){
+      _dvRefreshPromise=(async function(){
+        try{
+          var r=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+            body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent(DV_URL+'/user_impersonation openid profile email offline_access')});
+          if(!r.ok) throw new Error('DV refresh '+r.status);
+          var t=await r.json();
+          _dvToken=t.access_token; _dvExpiry=Date.now()+(t.expires_in-60)*1000;
+          if(t.refresh_token) _refreshToken=t.refresh_token;  // ① 新 refresh_token 更新
+          _authStatus.dataverse='ok';
+          return _dvToken;
+        }catch(e){
+          /* ② 失敗時のみ再ログイン */
+          _refreshToken=null; _dvToken=null; _dvExpiry=0;
+          _authStatus.dataverse='error';
+          _toast('セッションが切れました。再ログインしてください。','warn');
+          setTimeout(function(){_showSplash();},2000);
+          throw e;
+        }finally{
+          _dvRefreshPromise=null;
+        }
+      })();
+    }
+    return _dvRefreshPromise;
+  }
+  if(type==='graph'){
+    if(_authStatus.graph==='skip') return null;
+    /* キャッシュ有効ならそのまま返す */
+    if(_grToken&&Date.now()<_grExpiry) return _grToken;
+    /* refresh_token がない → graph error, DV は維持 */
+    if(!_refreshToken){
+      _authStatus.graph='error'; _updateDot(); return null;
+    }
+    /* ④ 並行リフレッシュ排他 */
+    if(!_grRefreshPromise){
+      _grRefreshPromise=(async function(){
+        try{
+          var r=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+            body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent('https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read offline_access')});
+          if(!r.ok){var ej=await r.json();throw Object.assign(new Error(r.status),{code:ej.error});}
+          var t=await r.json();
+          _grToken=t.access_token; _grExpiry=Date.now()+(t.expires_in-60)*1000;
+          if(t.refresh_token) _refreshToken=t.refresh_token;
+          _authStatus.graph='ok'; _authStatus.graphError='';
+          _updateDot();
+          return _grToken;
+        }catch(e){
+          /* ③ Graph 失敗: DV は維持、点を主観に */
+          _authStatus.graph='error'; _authStatus.graphError=e.code||String(e);
+          _updateDot();
+          return null;
+        }finally{
+          _grRefreshPromise=null;
+        }
+      })();
+    }
+    return _grRefreshPromise;
+  }
+  throw new Error('unknown token type: '+type);
+}
+
+/* ── ⑤ テスト用: 만료 강제 (?debug=1 時のみ動作) ── */
+function _expireForTest(){
+  try{if(new URL(location.href).searchParams.get('debug')!=='1') return;}catch(e){return;}
+  _dvExpiry=0; _grExpiry=0;
+}
+
+/* ── 画面切り替え ── */
 function _showSplash(){
-  const splash=document.getElementById('ln-splash');
-  const app=document.getElementById('app');
+  var splash=document.getElementById('ln-splash');
+  var app=document.getElementById('app');
   if(splash) splash.style.display='flex';
   if(app) app.style.display='none';
-  _dvToken=null;_dvExpiry=0;_grToken=null;_grExpiry=0;_user=null;
+  _dvToken=null; _dvExpiry=0; _grToken=null; _grExpiry=0;
+  _refreshToken=null; _dvRefreshPromise=null; _grRefreshPromise=null;
+  _user=null;
   _authStatus={dataverse:'error',graph:_cfg.needGraph===false?'skip':'error',graphError:''};
 }
 
 function _showApp(){
-  const splash=document.getElementById('ln-splash');
-  const app=document.getElementById('app');
+  var splash=document.getElementById('ln-splash');
+  var app=document.getElementById('app');
   if(splash) splash.style.display='none';
   if(app) app.style.display='';
   if(!document.getElementById('ln-header')){
-    const h=_buildHeader();
+    var h=_buildHeader();
     if(app) app.insertBefore(h, app.firstChild);
   }
   if(app&&!app.querySelector('.ln-footer')) app.appendChild(_buildFooter());
-  const av=document.getElementById('ln-avatar');
-  const un=document.getElementById('ln-username');
-  if(av&&_user) av.textContent=_user.initials||_user.staffCode;
+  var av=document.getElementById('ln-avatar');
+  var un=document.getElementById('ln-username');
+  if(av&&_user) av.textContent=_user.initials||_user.staffCode||'??';
   if(un&&_user) un.textContent=_user.name;
-  const extra=document.getElementById('ln-hdr-extra-btns');
+  var extra=document.getElementById('ln-hdr-extra-btns');
   if(extra){
     extra.innerHTML='';
     _headerBtns.forEach(function(b){
-      const el=document.createElement('button'); el.className='ln-btn-ghost'; el.textContent=b.label;
+      var el=document.createElement('button'); el.className='ln-btn-ghost'; el.textContent=b.label;
       if(b.title) el.title=b.title;
       el.addEventListener('click',b.onClick); extra.appendChild(el);
     });
   }
   _updateDot();
-  let t='dark'; try{t=localStorage.getItem('leenai_theme')||'dark';}catch(e){}
-  _applyTheme(t);
+  var th='dark'; try{th=localStorage.getItem('leenai_theme')||'dark';}catch(e){}
+  _applyTheme(th);
 }
 
 /* ── init ── */
@@ -256,23 +347,22 @@ async function _init(cfg){
   _cfg=Object.assign({needGraph:true},cfg);
   document.title='LEENAI '+_cfg.sys+' '+_cfg.name+' v'+_cfg.version;
   Array.from(document.body.children).forEach(function(el){if(!el.id||el.id!=='ln-splash') el.style.display='none';});
-  let t='dark'; try{t=localStorage.getItem('leenai_theme')||'dark';}catch(e){}
-  _applyTheme(t);
+  var th='dark'; try{th=localStorage.getItem('leenai_theme')||'dark';}catch(e){}
+  _applyTheme(th);
   _buildSplash();
-  const url=new URL(location.href);
+  var url=new URL(location.href);
   if(url.searchParams.has('code')){
-    const ok=await _handleCallback();
-    if(ok){
-      _hideLoading();
-      _showApp();
-      if(typeof _cfg.onReady==='function') _cfg.onReady();
-    } else {_showSplash();}
+    var ok=await _handleCallback();
+    if(ok){_hideLoading();_showApp();if(typeof _cfg.onReady==='function') _cfg.onReady();}
+    else {_showSplash();}
   } else {_showSplash();}
 }
 
 /* ── logout ── */
 function _logout(){
-  _dvToken=null;_dvExpiry=0;_grToken=null;_grExpiry=0;_user=null;
+  _dvToken=null; _dvExpiry=0; _grToken=null; _grExpiry=0;
+  _refreshToken=null; _dvRefreshPromise=null; _grRefreshPromise=null;
+  _user=null;
   _authStatus={dataverse:'error',graph:_cfg.needGraph===false?'skip':'error',graphError:''};
   _showSplash();
 }
@@ -280,28 +370,12 @@ function _logout(){
 /* ── addHeaderButton ── */
 function _addHeaderButton(opts){
   _headerBtns.push(opts);
-  const extra=document.getElementById('ln-hdr-extra-btns');
+  var extra=document.getElementById('ln-hdr-extra-btns');
   if(extra){
-    const el=document.createElement('button'); el.className='ln-btn-ghost'; el.textContent=opts.label;
+    var el=document.createElement('button'); el.className='ln-btn-ghost'; el.textContent=opts.label;
     if(opts.title) el.title=opts.title;
     el.addEventListener('click',opts.onClick); extra.insertBefore(el,extra.firstChild);
   }
-}
-
-/* ── トークン取得 ── */
-async function _getToken(type){
-  if(type==='dataverse'){
-    if(_dvToken&&Date.now()<_dvExpiry) return _dvToken;
-    _toast('セッションが切れました。再ログインしてください。','warn');
-    setTimeout(function(){_showSplash();},2000);
-    throw new Error('session expired');
-  }
-  if(type==='graph'){
-    if(_authStatus.graph==='skip') return null;
-    if(_grToken&&Date.now()<_grExpiry) return _grToken;
-    _authStatus.graph='error'; _updateDot(); return null;
-  }
-  throw new Error('unknown token type: '+type);
 }
 
 /* ── 公開 API ── */
@@ -310,6 +384,7 @@ window.LEENAI={
   auth:{
     get status(){return Object.assign({},_authStatus);},
     token:_getToken,
+    _expireForTest:_expireForTest,
   },
   get user(){return _user?Object.assign({},_user):null;},
   logout:_logout,
@@ -318,7 +393,7 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.2',
+  VERSION:'v1.3',
   _toggleTheme:_toggleTheme,
 };
 })();
