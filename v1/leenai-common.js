@@ -473,7 +473,11 @@ async function _masterGet(name,opts){
     var eTag=res.headers.get('ETag')||res.headers.get('etag')||'';
     var doc=await res.json();
     _masterCache[name]={doc:doc,eTag:eTag,webUrl:null};
-    try{var mr=await _spFetch(metaUrl,false); if(mr.ok){var meta=await mr.json();_masterCache[name].webUrl=meta.webUrl||null;}}catch(e2){}
+    /* フォルダの webUrl を取得 (ファイルの webUrl は JSON ダウンロードになるため) */
+    try{
+      var folderMeta=await _spFetch(GRAPH_BASE+'drives/'+SP_DRIVE_ID+'/root:/'+_spEnc(MASTER_PATH),false);
+      if(folderMeta.ok){var fm=await folderMeta.json();_masterCache[name].webUrl=fm.webUrl||null;}
+    }catch(e2){}
     try{localStorage.setItem('leenai_master_'+name,JSON.stringify(doc));}catch(e3){}
     return doc.items;
   }catch(e){
