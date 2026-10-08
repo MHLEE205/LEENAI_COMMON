@@ -1,4 +1,4 @@
-/* LEENAI_COMMON v1.7 (2026-10-08) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.8 (2026-10-08) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
               v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
@@ -7,7 +7,9 @@
               v1.4 — _expireForTest: ?debug=1 がリダイレクト後消えても sessionStorage で引き継ぐ
               v1.5 — v1.4 バグ修正: _showSplash での debug フラグ削除を廃止。削除は logout 時のみ
               v1.6 — Graph権限範囲拡大(Files.Read.All/ReadWrite, 失敗時 narrow スコープへフォールバック), SharePoint 読み取り関数(sp.getJson/list)
-              v1.7 — redirectUri オプション追加(init), onLogout フック追加 */
+              v1.7 — redirectUri オプション追加(init), onLogout フック追加
+               v1.8 — Graph スコープを 3 段階化 (Mail.ReadWrite 付き → WIDE → NARROW)。Mail.ReadWrite は B-03 の「PDF添付で下書き作成」用。
+                      未許可のアカウントは従来どおり WIDE/NARROW になるため既存 TOOL の動作は変わらない */
 (function(){
 'use strict';
 
@@ -19,6 +21,8 @@ const AUTH_URL  = 'https://login.microsoftonline.com/'+TENANT_ID+'/oauth2/v2.0';
 
 /* Graph スコープ: まず広い範囲を要求、拒否されたら狭い範囲にフォールバック */
 const GR_SCOPE_WIDE   = 'https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Files.Read.All https://graph.microsoft.com/Files.ReadWrite offline_access';
+/* v1.8: 下書き作成 (Mail.ReadWrite) 付き。許可されていないアカウントでは拒否され、静かに WIDE へフォールバックする */
+const GR_SCOPE_MAIL   = GR_SCOPE_WIDE + ' https://graph.microsoft.com/Mail.ReadWrite';
 const GR_SCOPE_NARROW = 'https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Send offline_access';
 
 /* SharePoint */
@@ -216,14 +220,21 @@ async function _handleCallback(){
     /* ── Step2: Graph トークン取得 (wide scope → narrow フォールバック) ── */
     if(_cfg.needGraph!==false){
       _updateLoading('Outlook 接続中…');
+      /* v1.8: 3 段階 — ① Mail.ReadWrite 付き → ② WIDE → ③ NARROW (②③ は従来どおり) */
+      var _grTier=GR_SCOPE_MAIL;
       var r2w=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent(GR_SCOPE_WIDE)});
+        body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent(GR_SCOPE_MAIL)});
+      if(!r2w.ok){
+        _grTier=GR_SCOPE_WIDE;
+        r2w=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+          body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent(GR_SCOPE_WIDE)});
+      }
       if(r2w.ok){
         /* wide scope 成功 */
         var t2=await r2w.json();
         _grToken=t2.access_token; _grExpiry=Date.now()+(t2.expires_in-60)*1000;
         if(t2.refresh_token) _refreshToken=t2.refresh_token;
-        _grScope=GR_SCOPE_WIDE;
+        _grScope=_grTier;
         _authStatus.graph='ok'; _authStatus.graphError='';
       } else {
         /* wide scope 失敗 → narrow スコープで再試行 */
@@ -448,7 +459,7 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.7',
+  VERSION:'v1.8',
   _toggleTheme:_toggleTheme,
   /* ── SharePoint 読み取り (v1.6) ── */
   sp:{
