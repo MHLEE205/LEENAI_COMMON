@@ -1,4 +1,4 @@
-/* LEENAI_COMMON v1.6 (2026-10-08) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.7 (2026-10-08) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
               v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
@@ -6,7 +6,8 @@
               v1.3 — refresh_token 保管・自動更新実装, 並行リフレッシュ排他, _expireForTest(?debug=1)
               v1.4 — _expireForTest: ?debug=1 がリダイレクト後消えても sessionStorage で引き継ぐ
               v1.5 — v1.4 バグ修正: _showSplash での debug フラグ削除を廃止。削除は logout 時のみ
-              v1.6 — Graph権限範囲拡大(Files.Read.All/ReadWrite, 失敗時 narrow スコープへフォールバック), SharePoint 読み取り関数(sp.getJson/list) */
+              v1.6 — Graph権限範囲拡大(Files.Read.All/ReadWrite, 失敗時 narrow スコープへフォールバック), SharePoint 読み取り関数(sp.getJson/list)
+              v1.7 — redirectUri オプション追加(init), onLogout フック追加 */
 (function(){
 'use strict';
 
@@ -170,7 +171,7 @@ async function _startLogin(){
   var state=randomStr(32);
   var pkceKey='leenai_pkce_'+_cfg.sys;
   try{sessionStorage.setItem(pkceKey,JSON.stringify({verifier:verifier,state:state}));}catch(e){}
-  var rdUri=location.origin+location.pathname.replace(/index\.html$/,'');
+  var rdUri=_cfg.redirectUri||(location.origin+location.pathname.replace(/index\.html$/,''));
   var scope=encodeURIComponent(DV_URL+'/user_impersonation openid profile email offline_access');
   var params='client_id='+CLIENT_ID+'&response_type=code&redirect_uri='+encodeURIComponent(rdUri)+'&scope='+scope+'&code_challenge='+challenge+'&code_challenge_method=S256&state='+state+'&prompt=select_account';
   location.href=AUTH_URL+'/authorize?'+params;
@@ -191,7 +192,7 @@ async function _handleCallback(){
     return false;
   }
   history.replaceState({},'',location.pathname);
-  var rdUri=location.origin+location.pathname.replace(/index\.html$/,'');
+  var rdUri=_cfg.redirectUri||(location.origin+location.pathname.replace(/index\.html$/,''));
   _showLoading('認証中…');
   try{
     /* ── Step1: DV トークン取得 ── */
@@ -417,6 +418,7 @@ function _logout(){
   _user=null;
   _authStatus={dataverse:'error',graph:_cfg.needGraph===false?'skip':'error',graphError:''};
   try{sessionStorage.removeItem('leenai_debug_'+(_cfg.sys||''));}catch(e){}
+  if(typeof _cfg.onLogout==='function') try{_cfg.onLogout();}catch(e){}
   _showSplash();
 }
 
@@ -446,7 +448,7 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.6',
+  VERSION:'v1.7',
   _toggleTheme:_toggleTheme,
   /* ── SharePoint 読み取り (v1.6) ── */
   sp:{
