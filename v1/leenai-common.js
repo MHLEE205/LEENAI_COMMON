@@ -1,4 +1,4 @@
-/* LEENAI_COMMON v1.8 (2026-10-08) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.9 (2026-10-08) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
               v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
@@ -8,8 +8,8 @@
               v1.5 — v1.4 バグ修正: _showSplash での debug フラグ削除を廃止。削除は logout 時のみ
               v1.6 — Graph権限範囲拡大(Files.Read.All/ReadWrite, 失敗時 narrow スコープへフォールバック), SharePoint 読み取り関数(sp.getJson/list)
               v1.7 — redirectUri オプション追加(init), onLogout フック追加
-               v1.8 — Graph スコープを 3 段階化 (Mail.ReadWrite 付き → WIDE → NARROW)。Mail.ReadWrite は B-03 の「PDF添付で下書き作成」用。
-                      未許可のアカウントは従来どおり WIDE/NARROW になるため既存 TOOL の動作は変わらない */
+              v1.8 — Graph スコープを 3 段階化 (Mail.ReadWrite 付き → WIDE → NARROW)
+              v1.9 — 공통 마스터 (LEENAI.master.get/find/list, ⚙ マスター設定 패널, 충돌·입력 검사, 변경 기록 50건) */
 (function(){
 'use strict';
 
@@ -147,6 +147,7 @@ function _buildHeader(){
     +'<span class="ln-dot" id="ln-dot" title="接続中"></span>'
     +'</span>'
     +'<span id="ln-hdr-extra-btns"></span>'
+    +'<button class="ln-btn-ghost" onclick="LEENAI._openMasterPanel()" title="マスター設定" style="font-size:14px;padding:4px 8px;">⚙</button>'
     +'<button class="ln-btn-ghost" data-ln="themeBtn" onclick="LEENAI._toggleTheme()">🌙 ダーク</button>'
     +'<button class="ln-btn-ghost" onclick="LEENAI.logout()">ログアウト</button>'
     +'</div>';
@@ -444,6 +445,346 @@ function _addHeaderButton(opts){
   }
 }
 
+/* ── マスター (v1.9) ── */
+var _masterCache={};   // {name:{doc,eTag,webUrl}}
+var _masterPanel=null, _masterCurName=null, _masterTab='table', _masterDraft={};
+var MASTER_PATH='古紙/-. AI 活用/MASTER';
+
+function _mEsc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+function _masterShowBadge(msg){
+  var el=document.getElementById('ln-master-badge');
+  if(!el){
+    el=document.createElement('span'); el.id='ln-master-badge';
+    el.style.cssText='font-size:11px;color:var(--warn);font-weight:600;margin-right:6px;';
+    var r=document.getElementById('ln-hdr-right');
+    if(r) r.insertBefore(el,r.firstChild);
+  }
+  el.textContent=msg||'';
+}
+
+async function _masterGet(name,opts){
+  if(!(opts&&opts.fresh)&&_masterCache[name]) return _masterCache[name].doc.items;
+  var contentUrl=GRAPH_BASE+'drives/'+SP_DRIVE_ID+'/root:/'+_spEnc(MASTER_PATH+'/master_'+name+'.json')+':/content';
+  var metaUrl=GRAPH_BASE+'drives/'+SP_DRIVE_ID+'/root:/'+_spEnc(MASTER_PATH+'/master_'+name+'.json');
+  try{
+    var res=await _spFetch(contentUrl,false);
+    if(!res.ok) throw new Error('SP master '+res.status);
+    var eTag=res.headers.get('ETag')||res.headers.get('etag')||'';
+    var doc=await res.json();
+    _masterCache[name]={doc:doc,eTag:eTag,webUrl:null};
+    try{var mr=await _spFetch(metaUrl,false); if(mr.ok){var meta=await mr.json();_masterCache[name].webUrl=meta.webUrl||null;}}catch(e2){}
+    try{localStorage.setItem('leenai_master_'+name,JSON.stringify(doc));}catch(e3){}
+    return doc.items;
+  }catch(e){
+    var saved=null; try{saved=JSON.parse(localStorage.getItem('leenai_master_'+name)||'null');}catch(e4){}
+    if(saved){_masterShowBadge('⚠ マスター: 前回の内容で動作中'); if(!_masterCache[name]) _masterCache[name]={doc:saved,eTag:'',webUrl:null}; return saved.items;}
+    throw e;
+  }
+}
+
+function _masterFind(name,filter){
+  if(!_masterCache[name]) return null;
+  var items=_masterCache[name].doc.items;
+  return items.find(function(row){return Object.keys(filter).every(function(k){return String(row[k]||'')===String(filter[k]||'');});}) || null;
+}
+
+async function _masterList(){
+  var files=await LEENAI.sp.list(MASTER_PATH);
+  var masters=files.filter(function(f){return /^master_[a-z_]+\.json$/.test(f.name);});
+  var results=[];
+  for(var i=0;i<masters.length;i++){
+    var n=masters[i].name.replace(/^master_/,'').replace(/\.json$/,'');
+    try{
+      await _masterGet(n,{fresh:false});
+      var d=_masterCache[n].doc;
+      results.push({name:n,title:d.title||n,count:(d.items||[]).length,updated_at:d.updated_at||'',updated_by:d.updated_by||''});
+    }catch(e){results.push({name:n,title:n,count:0,updated_at:'',updated_by:''});}
+  }
+  return results;
+}
+
+function _buildMasterPanel(){
+  if(_masterPanel) return _masterPanel;
+  var panel=document.createElement('div');
+  panel.className='ln-master-panel ln-hidden'; panel.id='ln-master-panel';
+  panel.innerHTML=
+    '<div class="ln-master-topbar">'
+    +'<span class="ln-logo">LEEN<span>AI</span></span>'
+    +'<h2>⚙ マスター設定</h2>'
+    +'<span id="ln-master-readonly-msg" style="font-size:11px;color:var(--warn);display:none;">編集権限がありません（読取専用）</span>'
+    +'<button class="ln-btn-ghost" id="ln-master-close">✕ 閉じる</button>'
+    +'</div>'
+    +'<div class="ln-master-body">'
+    +'<div class="ln-master-sidebar" id="ln-master-sidebar"><div style="padding:12px;font-size:12px;color:var(--text3);">読み込み中…</div></div>'
+    +'<div class="ln-master-main" id="ln-master-main">'
+    +'<div class="ln-master-tabs">'
+    +'<button class="ln-master-tab ln-active" id="ln-mtab-table" onclick="LEENAI._masterTabSwitch(\'table\')">📋 データ</button>'
+    +'<button class="ln-master-tab" id="ln-mtab-history" onclick="LEENAI._masterTabSwitch(\'history\')">📜 履歴</button>'
+    +'</div>'
+    +'<div id="ln-master-content" style="display:flex;flex-direction:column;flex:1;overflow:hidden;"></div>'
+    +'</div></div>';
+  document.body.appendChild(panel);
+  document.getElementById('ln-master-close').addEventListener('click',function(){_closeMasterPanel();});
+  _masterPanel=panel;
+  return panel;
+}
+
+function _openMasterPanel(){
+  _buildMasterPanel();
+  _masterPanel.classList.remove('ln-hidden');
+  _loadMasterSidebar();
+}
+
+function _closeMasterPanel(){
+  if(_masterPanel) _masterPanel.classList.add('ln-hidden');
+}
+
+async function _loadMasterSidebar(){
+  var sb=document.getElementById('ln-master-sidebar');
+  if(!sb) return;
+  sb.innerHTML='<div style="padding:12px;font-size:12px;color:var(--text3);">読み込み中…</div>';
+  try{
+    var list=await _masterList();
+    sb.innerHTML='';
+    list.forEach(function(m){
+      var d=document.createElement('div');
+      d.className='ln-master-sitem'+(m.name===_masterCurName?' ln-active':'');
+      d.setAttribute('data-mname',m.name);
+      d.innerHTML='<div style="font-weight:600;">'+_mEsc(m.title)+'</div>'
+        +'<div style="font-size:10px;color:var(--text3);">'+m.count+'件</div>';
+      d.addEventListener('click',function(){_selectMaster(m.name);});
+      sb.appendChild(d);
+    });
+  }catch(e){
+    sb.innerHTML='<div style="padding:12px;font-size:11px;color:var(--danger);">読込エラー: '+_mEsc(e.message)+'</div>';
+  }
+}
+
+async function _selectMaster(name){
+  _masterCurName=name;
+  document.querySelectorAll('#ln-master-sidebar .ln-master-sitem').forEach(function(el){
+    el.classList.toggle('ln-active',el.getAttribute('data-mname')===name);
+  });
+  _masterTab='table';
+  var t1=document.getElementById('ln-mtab-table'); if(t1) t1.classList.add('ln-active');
+  var t2=document.getElementById('ln-mtab-history'); if(t2) t2.classList.remove('ln-active');
+  await _renderMasterTable(name);
+}
+
+function _masterIsReadonly(){
+  return !!(_authStatus.graphError&&_authStatus.graphError.startsWith('files:'));
+}
+
+async function _renderMasterTable(name){
+  var content=document.getElementById('ln-master-content');
+  if(!content) return;
+  content.innerHTML='<div style="padding:12px;font-size:12px;color:var(--text3);">読み込み中…</div>';
+  try{
+    if(!_masterCache[name]) await _masterGet(name,{fresh:true});
+    var doc=_masterCache[name].doc;
+    var fields=doc.fields;
+    if(!_masterDraft[name]) _masterDraft[name]={orig:JSON.parse(JSON.stringify(doc.items)),rows:JSON.parse(JSON.stringify(doc.items)),deleted:[],added:[]};
+    var draft=_masterDraft[name];
+    var ro=_masterIsReadonly();
+    var rmEl=document.getElementById('ln-master-readonly-msg');
+    if(rmEl) rmEl.style.display=ro?'':'none';
+    var html='<div class="ln-master-toolbar">'
+      +'<input class="ln-master-search" id="ln-msearch" placeholder="検索…" oninput="LEENAI._masterSearch()">'
+      +(!ro?'<button class="ln-btn-ghost" style="font-size:12px;" onclick="LEENAI._masterAddRow()">＋ 行を追加</button>':'')
+      +'</div>'
+      +'<div class="ln-master-table-wrap">'
+      +'<table class="ln-master-table" id="ln-master-tbl"><thead><tr>';
+    fields.forEach(function(f){html+='<th onclick="LEENAI._masterSort(\''+f.key+'\')" style="cursor:pointer;">'+_mEsc(f.label)+' ⇅</th>';});
+    html+='<th>操作</th></tr></thead><tbody id="ln-master-tbody"></tbody></table></div>'
+      +'<div class="ln-master-footer">'
+      +(!ro?'<button class="ln-btn-ghost" style="font-size:12px;background:var(--accent-btn);color:#fff;border:none;" onclick="LEENAI._masterSave()">💾 保存</button>':'')
+      +(!ro?'<button class="ln-btn-ghost" style="font-size:12px;" onclick="LEENAI._masterRevert()">↩ 元に戻す</button>':'')
+      +'<a href="#" id="ln-master-splink" style="font-size:11px;color:var(--accent);" target="_blank">SharePoint で開く</a>'
+      +'<button class="ln-btn-ghost" style="font-size:12px;" onclick="LEENAI._masterDownload()">⬇ JSON ダウンロード</button>'
+      +'<span class="ln-master-info" id="ln-master-info"></span>'
+      +'</div>'
+      +'<div class="ln-master-err" id="ln-master-err"></div>';
+    content.innerHTML=html;
+    _masterRenderRows(name,fields,draft.rows,ro);
+    var linkEl=document.getElementById('ln-master-splink');
+    if(linkEl&&_masterCache[name]&&_masterCache[name].webUrl) linkEl.href=_masterCache[name].webUrl;
+  }catch(e){
+    content.innerHTML='<div style="padding:20px;color:var(--danger);">エラー: '+_mEsc(e.message)+'</div>';
+  }
+}
+
+function _masterRenderRows(name,fields,rows,ro){
+  var tbody=document.getElementById('ln-master-tbody'); if(!tbody) return;
+  var search=''; try{search=(document.getElementById('ln-msearch')||{}).value||'';}catch(e){}
+  var draft=_masterDraft[name]; if(!draft) return;
+  tbody.innerHTML='';
+  rows.forEach(function(row,ri){
+    if(search){
+      var match=fields.some(function(f){return String(row[f.key]||'').toLowerCase().includes(search.toLowerCase());});
+      if(!match) return;
+    }
+    var isNew=draft.added.indexOf(row)>=0;
+    var isDel=draft.deleted.indexOf(ri)>=0;
+    var isChanged=!isNew&&JSON.stringify(row)!==JSON.stringify(draft.orig[ri]);
+    var tr=document.createElement('tr');
+    tr.className=isDel?'ln-master-row-del':isNew?'ln-master-row-new':isChanged?'ln-master-row-changed':'';
+    var cells='';
+    fields.forEach(function(f){
+      var v=row[f.key]!=null?String(row[f.key]):'';
+      if(ro||isDel){cells+='<td>'+_mEsc(v)+'</td>';}
+      else if(f.type==='bool'){cells+='<td><input type="checkbox"'+(v==='true'||v===true?' checked':'')
+        +' data-ri="'+ri+'" data-key="'+f.key+'" onchange="LEENAI._masterCellChange(this)"></td>';}
+      else{cells+='<td><input class="ln-master-cell-input" type="text" value="'+_mEsc(v)+'" data-ri="'+ri+'" data-key="'+f.key+'" oninput="LEENAI._masterCellChange(this)"></td>';}
+    });
+    var act=ro?'<td></td>':isDel
+      ?'<td><button onclick="LEENAI._masterRestoreRow('+ri+')">↩</button></td>'
+      :'<td><button onclick="LEENAI._masterDeleteRow('+ri+')">🗑</button></td>';
+    tr.innerHTML=cells+act;
+    tbody.appendChild(tr);
+  });
+  var info=document.getElementById('ln-master-info'); if(info) info.textContent=rows.length+'件';
+}
+
+async function _renderMasterHistory(name){
+  var content=document.getElementById('ln-master-content'); if(!content) return;
+  try{
+    if(!_masterCache[name]) await _masterGet(name,{fresh:true});
+    var history=_masterCache[name].doc.history||[];
+    var html='<div style="overflow-y:auto;padding:8px;">';
+    if(!history.length) html+='<div style="padding:20px;color:var(--text3);">履歴なし</div>';
+    history.forEach(function(h){
+      html+='<div class="ln-master-history-item"><div>'+_mEsc(h.summary||'')+'</div>'
+        +'<div class="ln-mh-meta">'+_mEsc(h.by||'')+'&nbsp;·&nbsp;'+_mEsc(h.at||'')+'</div></div>';
+    });
+    html+='</div>';
+    content.innerHTML=html;
+  }catch(e){content.innerHTML='<div style="padding:20px;color:var(--danger);">エラー: '+_mEsc(e.message)+'</div>';}
+}
+
+function _masterTabSwitch(tab){
+  _masterTab=tab;
+  var t1=document.getElementById('ln-mtab-table'); if(t1) t1.classList.toggle('ln-active',tab==='table');
+  var t2=document.getElementById('ln-mtab-history'); if(t2) t2.classList.toggle('ln-active',tab==='history');
+  if(tab==='table') _renderMasterTable(_masterCurName);
+  else _renderMasterHistory(_masterCurName);
+}
+
+function _masterSearch(){
+  if(!_masterCurName||!_masterCache[_masterCurName]) return;
+  var d=_masterCache[_masterCurName];
+  _masterRenderRows(_masterCurName,d.doc.fields,_masterDraft[_masterCurName]?_masterDraft[_masterCurName].rows:d.doc.items,_masterIsReadonly());
+}
+
+function _masterSort(key){
+  if(!_masterCurName||!_masterDraft[_masterCurName]) return;
+  _masterDraft[_masterCurName].rows.sort(function(a,b){return String(a[key]||'').localeCompare(String(b[key]||''),'ja');});
+  var d=_masterCache[_masterCurName];
+  _masterRenderRows(_masterCurName,d.doc.fields,_masterDraft[_masterCurName].rows,_masterIsReadonly());
+}
+
+function _masterAddRow(){
+  if(!_masterCurName||!_masterDraft[_masterCurName]) return;
+  var d=_masterCache[_masterCurName].doc; var row={};
+  d.fields.forEach(function(f){row[f.key]='';});
+  _masterDraft[_masterCurName].rows.push(row);
+  _masterDraft[_masterCurName].added.push(row);
+  _masterRenderRows(_masterCurName,d.fields,_masterDraft[_masterCurName].rows,false);
+}
+
+function _masterDeleteRow(ri){
+  if(!confirm('この行を削除します。よろしいですか？')) return;
+  _masterDraft[_masterCurName].deleted.push(ri);
+  var d=_masterCache[_masterCurName].doc;
+  _masterRenderRows(_masterCurName,d.fields,_masterDraft[_masterCurName].rows,false);
+}
+
+function _masterRestoreRow(ri){
+  var di=_masterDraft[_masterCurName].deleted.indexOf(ri);
+  if(di>=0) _masterDraft[_masterCurName].deleted.splice(di,1);
+  var d=_masterCache[_masterCurName].doc;
+  _masterRenderRows(_masterCurName,d.fields,_masterDraft[_masterCurName].rows,false);
+}
+
+function _masterCellChange(el){
+  var ri=parseInt(el.dataset.ri),key=el.dataset.key;
+  if(_masterDraft[_masterCurName]) _masterDraft[_masterCurName].rows[ri][key]=el.type==='checkbox'?el.checked:el.value;
+}
+
+function _masterRevert(){
+  delete _masterDraft[_masterCurName];
+  _renderMasterTable(_masterCurName);
+}
+
+function _masterDownload(){
+  if(!_masterCurName||!_masterCache[_masterCurName]) return;
+  var blob=new Blob([JSON.stringify(_masterCache[_masterCurName].doc,null,2)],{type:'application/json'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='master_'+_masterCurName+'.json'; a.click();
+}
+
+async function _masterSave(){
+  if(!_masterCurName) return;
+  var draft=_masterDraft[_masterCurName]; var cached=_masterCache[_masterCurName];
+  if(!draft||!cached) return;
+  var doc=JSON.parse(JSON.stringify(cached.doc));
+  var fields=doc.fields;
+  var errEl=document.getElementById('ln-master-err'); if(errEl) errEl.textContent='';
+  var rows=draft.rows.filter(function(_,i){return draft.deleted.indexOf(i)<0;});
+  var errors=[];
+  rows.forEach(function(row){
+    fields.forEach(function(f){
+      var v=String(row[f.key]||'').trim();
+      if(f.required&&!v){errors.push(f.label+': 必須項目です');}
+      if(v&&f.type==='email'){if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) errors.push(f.label+': メール形式エラー ('+v+')');}
+      if(v&&f.type==='emails'){v.split(/[;,\/\s]+/).filter(Boolean).forEach(function(a){if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a.trim())) errors.push(f.label+': メール形式 ('+a.trim()+')');});}
+      if(v&&f.type==='emails_or_fax'){v.split(/[;,\/\s]+/).filter(Boolean).forEach(function(a){if(a.trim()!=='FAX'&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a.trim())) errors.push(f.label+': メールかFAX ('+a.trim()+')');});}
+    });
+  });
+  if(doc.unique&&doc.unique.length){
+    var seen={};
+    rows.forEach(function(row){var k=doc.unique.map(function(u){return row[u]||'';}).join('|'); if(seen[k]) errors.push('キー重複: '+k); seen[k]=true;});
+  }
+  if(errors.length){if(errEl) errEl.textContent=errors.slice(0,3).join(' / '); return;}
+  var addedCt=draft.added.length;
+  var deletedCt=draft.deleted.length;
+  var changedCt=rows.filter(function(row,i){return draft.added.indexOf(row)<0&&JSON.stringify(row)!==JSON.stringify(draft.orig[i]);}).length;
+  var summary='追加 '+addedCt+'件・修正 '+changedCt+'件・削除 '+deletedCt+'件';
+  doc.items=rows;
+  doc.updated_at=new Date().toLocaleString('sv',{timeZone:'Asia/Tokyo'}).replace(' ','T')+'+09:00';
+  doc.updated_by=(_user&&_user.name)||'?';
+  if(!doc.history) doc.history=[];
+  doc.history.unshift({at:doc.updated_at,by:doc.updated_by,summary:summary});
+  if(doc.history.length>50) doc.history=doc.history.slice(0,50);
+  var body=JSON.stringify(doc,null,2);
+  var putUrl=GRAPH_BASE+'drives/'+SP_DRIVE_ID+'/root:/'+_spEnc(MASTER_PATH+'/master_'+_masterCurName+'.json')+':/content';
+  try{
+    var tok=await _getToken('graph');
+    if(!tok) throw new Error('Graph トークンがありません');
+    var hdrs={Authorization:'Bearer '+tok,'Content-Type':'application/json'};
+    if(cached.eTag) hdrs['If-Match']=cached.eTag;
+    var res=await fetch(putUrl,{method:'PUT',headers:hdrs,body:body});
+    if(res.status===412){
+      if(errEl){
+        errEl.textContent='他の人が更新しました。再読み込みしてください。';
+        var rb=document.createElement('button'); rb.className='ln-btn-ghost'; rb.style.marginLeft='8px'; rb.style.fontSize='12px';
+        rb.textContent='再読み込み';
+        rb.onclick=function(){delete _masterDraft[_masterCurName]; delete _masterCache[_masterCurName]; _renderMasterTable(_masterCurName);};
+        errEl.appendChild(rb);
+      }
+      return;
+    }
+    if(!res.ok) throw new Error('PUT '+res.status);
+    var saved=await res.json();
+    cached.doc=doc; cached.eTag=saved['@odata.etag']||res.headers.get('ETag')||cached.eTag;
+    try{localStorage.setItem('leenai_master_'+_masterCurName,JSON.stringify(doc));}catch(e2){}
+    delete _masterDraft[_masterCurName];
+    _toast('保存しました ('+summary+')','ok');
+    _renderMasterTable(_masterCurName);
+    _loadMasterSidebar();
+  }catch(e){if(errEl) errEl.textContent='保存エラー: '+e.message;}
+}
+
 /* ── 公開 API ── */
 window.LEENAI={
   init:_init,
@@ -459,8 +800,25 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.8',
+  VERSION:'v1.9',
   _toggleTheme:_toggleTheme,
+  _openMasterPanel:_openMasterPanel,
+  _masterTabSwitch:_masterTabSwitch,
+  _masterSearch:_masterSearch,
+  _masterSort:_masterSort,
+  _masterAddRow:_masterAddRow,
+  _masterDeleteRow:_masterDeleteRow,
+  _masterRestoreRow:_masterRestoreRow,
+  _masterCellChange:_masterCellChange,
+  _masterRevert:_masterRevert,
+  _masterDownload:_masterDownload,
+  _masterSave:_masterSave,
+  /* ── マスター (v1.9) ── */
+  master:{
+    get:_masterGet,
+    find:_masterFind,
+    list:_masterList,
+  },
   /* ── SharePoint 読み取り (v1.6) ── */
   sp:{
     getJson:async function(path){
@@ -492,6 +850,7 @@ window.LEENAI={
         '古紙/-. AI 活用/D-01-LC_FD_CHECKER',
         '古紙/-. 古紙書類/▲ LC_LEENAI_JSON',
       ],
+      MASTER:MASTER_PATH,
     },
   },
 };

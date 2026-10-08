@@ -1,6 +1,7 @@
-/* LEENAI_COMMON v1.0 (2026-10-07) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.9 (2026-10-08) — DOC-Z-05 v1.0
    全 TOOL が読み込む共通 CSS。v1/ は破壊的変更禁止。変更は v2/ 以降。
-   ChangeLog: v1.0 — 新規 */
+   ChangeLog: v1.0 — 新規
+              v1.9 — マスター設定パネル CSS 追加 */
 
 /* ===== 4 テーマ トークン ===== */
 :root{
@@ -75,3 +76,37 @@ body{background:var(--frame);color:var(--text);font-family:var(--font);font-size
 
 /* ===== 印刷 ===== */
 @media print{.ln-header,.ln-footer,.ln-toast-wrap,.ln-loading{display:none!important}}
+
+/* ===== マスター設定パネル (v1.9) ===== */
+.ln-master-panel{position:fixed;inset:0;z-index:500;display:flex;flex-direction:column;background:var(--frame);overflow:hidden;}
+.ln-master-panel.ln-hidden{display:none;}
+.ln-master-topbar{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;}
+.ln-master-topbar h2{font-size:15px;font-weight:700;margin:0;flex:1;}
+.ln-master-body{display:flex;flex:1;overflow:hidden;}
+.ln-master-sidebar{width:200px;border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0;padding:8px 0;}
+.ln-master-sitem{padding:9px 16px;cursor:pointer;font-size:13px;border-left:3px solid transparent;}
+.ln-master-sitem:hover{background:var(--surface2);}
+.ln-master-sitem.ln-active{background:var(--surface2);border-left-color:var(--accent);font-weight:600;color:var(--accent);}
+.ln-master-main{flex:1;display:flex;flex-direction:column;overflow:hidden;padding:16px;}
+.ln-master-tabs{display:flex;gap:4px;margin-bottom:12px;}
+.ln-master-tab{padding:5px 14px;border-radius:6px;border:1px solid var(--border);font-size:12px;cursor:pointer;background:var(--surface2);color:var(--text2);}
+.ln-master-tab.ln-active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.ln-master-toolbar{display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap;}
+.ln-master-search{background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:5px 10px;font-size:12px;width:200px;outline:none;}
+.ln-master-search:focus{border-color:var(--accent);}
+.ln-master-table-wrap{flex:1;overflow:auto;border:1px solid var(--border);border-radius:8px;}
+.ln-master-table{width:100%;border-collapse:collapse;font-size:12px;}
+.ln-master-table th{background:var(--frame);color:var(--text);font-weight:700;padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap;position:sticky;top:0;z-index:1;}
+.ln-master-table td{padding:5px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.ln-master-table tr:hover td{background:var(--surface2);}
+.ln-master-cell-input{width:100%;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text);font-size:12px;padding:2px 4px;font-family:var(--font);}
+.ln-master-cell-input:focus{background:var(--read);border-color:var(--accent);outline:none;}
+.ln-master-cell-input.ln-invalid{border-color:var(--danger)!important;background:rgba(239,68,68,.08)!important;}
+.ln-master-row-changed td{background:rgba(79,142,247,.06);}
+.ln-master-row-new td{background:rgba(34,197,94,.06);}
+.ln-master-row-del td{background:rgba(239,68,68,.06);text-decoration:line-through;opacity:.6;}
+.ln-master-footer{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap;}
+.ln-master-info{font-size:11px;color:var(--text3);margin-left:auto;}
+.ln-master-history-item{font-size:12px;padding:6px 0;border-bottom:1px solid var(--border);}
+.ln-mh-meta{font-size:11px;color:var(--text3);}
+.ln-master-err{font-size:12px;color:var(--danger);margin-top:6px;}
