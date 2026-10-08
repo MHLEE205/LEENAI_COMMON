@@ -1,11 +1,12 @@
-/* LEENAI_COMMON v1.5 (2026-10-08) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.6 (2026-10-08) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
               v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
               v1.2 — バージョン番号修正 (v1.1 → v1.2)
               v1.3 — refresh_token 保管・自動更新実装, 並行リフレッシュ排他, _expireForTest(?debug=1)
               v1.4 — _expireForTest: ?debug=1 がリダイレクト後消えても sessionStorage で引き継ぐ
-              v1.5 — v1.4 バグ修正: _showSplash での debug フラグ削除を廃止。削除は logout 時のみ */
+              v1.5 — v1.4 バグ修正: _showSplash での debug フラグ削除を廃止。削除は logout 時のみ
+              v1.6 — Graph権限範囲拡大(Files.Read.All/ReadWrite, 失敗時 narrow スコープへフォールバック), SharePoint 読み取り関数(sp.getJson/list) */
 (function(){
 'use strict';
 
@@ -14,6 +15,14 @@ const CLIENT_ID = 'f071a165-5e9b-44bf-b6a1-baba654524db';
 const TENANT_ID = 'a56988ff-c2b8-4df8-9727-889ad4205198';
 const DV_URL    = 'https://orgde512c6f.crm7.dynamics.com';
 const AUTH_URL  = 'https://login.microsoftonline.com/'+TENANT_ID+'/oauth2/v2.0';
+
+/* Graph スコープ: まず広い範囲を要求、拒否されたら狭い範囲にフォールバック */
+const GR_SCOPE_WIDE   = 'https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Files.Read.All https://graph.microsoft.com/Files.ReadWrite offline_access';
+const GR_SCOPE_NARROW = 'https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Send offline_access';
+
+/* SharePoint */
+const SP_DRIVE_ID = 'b!ZK58_9YllU-vETQD3Xz0TbOInXbVCXJHnQ2280KJBArFLeM_18EgRbSeoO-TW__U';
+const GRAPH_BASE  = 'https://graph.microsoft.com/v1.0/';
 
 const THEMES = ['dark','light','leenai','focus'];
 const THEME_LABEL = {dark:'🌙 ダーク',light:'☀️ ライト',leenai:'🌿 LEENAI',focus:'🎯 FOCUS'};
@@ -29,15 +38,16 @@ const DEFAULT_STAFF = [
 ];
 
 /* ── 内部ステート ── */
-let _cfg = {};
-let _dvToken = null, _dvExpiry = 0;
-let _grToken = null, _grExpiry = 0;
-let _refreshToken = null;       // メモリのみ保管
-let _dvRefreshPromise = null;   // 並行リフレッシュ排他用
-let _grRefreshPromise = null;
-let _user = null;
-let _authStatus = {dataverse:'error', graph:'skip', graphError:''};
-let _headerBtns = [];
+var _cfg = {};
+var _dvToken = null, _dvExpiry = 0;
+var _grToken = null, _grExpiry = 0;
+var _refreshToken = null;
+var _grScope = null;            // 成功した Graph スコープを記憶 (갱신 시 동일 scope 사용)
+var _dvRefreshPromise = null;
+var _grRefreshPromise = null;
+var _user = null;
+var _authStatus = {dataverse:'error', graph:'skip', graphError:''};
+var _headerBtns = [];
 
 /* ── ユーティリティ ── */
 function b64url(buf){return btoa(String.fromCharCode.apply(null,new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');}
@@ -190,7 +200,7 @@ async function _handleCallback(){
     if(!r1.ok) throw new Error('DV token '+r1.status);
     var t1=await r1.json();
     _dvToken=t1.access_token; _dvExpiry=Date.now()+(t1.expires_in-60)*1000;
-    _refreshToken=t1.refresh_token||null;   // ① refresh_token 保管
+    _refreshToken=t1.refresh_token||null;
     _authStatus.dataverse='ok';
     /* ── id_token → user (UTF-8デコード) ── */
     try{
@@ -202,19 +212,35 @@ async function _handleCallback(){
       var initials=(payload.name||'').split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase()||'??';
       _user={name:payload.name||email,email:email,staffCode:staff?staff.staffCode:'',initials:initials};
     }catch(e){_user={name:'(不明)',email:'',staffCode:'',initials:'??'};}
-    /* ── Step2: Graph トークン取得 ── */
+    /* ── Step2: Graph トークン取得 (wide scope → narrow フォールバック) ── */
     if(_cfg.needGraph!==false){
-      try{
-        _updateLoading('Outlook 接続中…');
-        var r2=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
-          body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent('https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read offline_access')});
-        if(!r2.ok){var ej=await r2.json();throw Object.assign(new Error(r2.status),{code:ej.error});}
-        var t2=await r2.json();
+      _updateLoading('Outlook 接続中…');
+      var r2w=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent(GR_SCOPE_WIDE)});
+      if(r2w.ok){
+        /* wide scope 成功 */
+        var t2=await r2w.json();
         _grToken=t2.access_token; _grExpiry=Date.now()+(t2.expires_in-60)*1000;
-        if(t2.refresh_token) _refreshToken=t2.refresh_token;  // ① 新 refresh_token が来たら更新
+        if(t2.refresh_token) _refreshToken=t2.refresh_token;
+        _grScope=GR_SCOPE_WIDE;
         _authStatus.graph='ok'; _authStatus.graphError='';
-      }catch(e){
-        _authStatus.graph='error'; _authStatus.graphError=e.code||String(e);
+      } else {
+        /* wide scope 失敗 → narrow スコープで再試行 */
+        var ejWide=await r2w.json();
+        var wideErrCode=ejWide.error||'scope_denied';
+        try{
+          var r2n=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+            body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent(GR_SCOPE_NARROW)});
+          if(!r2n.ok){var ejN=await r2n.json();throw Object.assign(new Error(r2n.status),{code:ejN.error});}
+          var t2n=await r2n.json();
+          _grToken=t2n.access_token; _grExpiry=Date.now()+(t2n.expires_in-60)*1000;
+          if(t2n.refresh_token) _refreshToken=t2n.refresh_token;
+          _grScope=GR_SCOPE_NARROW;
+          _authStatus.graph='ok';
+          _authStatus.graphError='files:'+wideErrCode;  // 点を主橙で警告
+        }catch(e2){
+          _authStatus.graph='error'; _authStatus.graphError=e2.code||String(e2);
+        }
       }
     } else {_authStatus.graph='skip';}
     return true;
@@ -228,15 +254,12 @@ async function _handleCallback(){
 /* ── トークン自動更新 ── */
 async function _getToken(type){
   if(type==='dataverse'){
-    /* キャッシュ有効ならそのまま返す */
     if(_dvToken&&Date.now()<_dvExpiry) return _dvToken;
-    /* refresh_token がない → 再ログイン */
     if(!_refreshToken){
       _toast('セッションが切れました。再ログインしてください。','warn');
       setTimeout(function(){_showSplash();},2000);
       throw new Error('session expired');
     }
-    /* ④ 並行リフレッシュ排他: 進行中のPromiseを共有 */
     if(!_dvRefreshPromise){
       _dvRefreshPromise=(async function(){
         try{
@@ -245,11 +268,10 @@ async function _getToken(type){
           if(!r.ok) throw new Error('DV refresh '+r.status);
           var t=await r.json();
           _dvToken=t.access_token; _dvExpiry=Date.now()+(t.expires_in-60)*1000;
-          if(t.refresh_token) _refreshToken=t.refresh_token;  // ① 新 refresh_token 更新
+          if(t.refresh_token) _refreshToken=t.refresh_token;
           _authStatus.dataverse='ok';
           return _dvToken;
         }catch(e){
-          /* ② 失敗時のみ再ログイン */
           _refreshToken=null; _dvToken=null; _dvExpiry=0;
           _authStatus.dataverse='error';
           _toast('セッションが切れました。再ログインしてください。','warn');
@@ -264,27 +286,26 @@ async function _getToken(type){
   }
   if(type==='graph'){
     if(_authStatus.graph==='skip') return null;
-    /* キャッシュ有効ならそのまま返す */
     if(_grToken&&Date.now()<_grExpiry) return _grToken;
-    /* refresh_token がない → graph error, DV は維持 */
     if(!_refreshToken){
       _authStatus.graph='error'; _updateDot(); return null;
     }
-    /* ④ 並行リフレッシュ排他 */
     if(!_grRefreshPromise){
       _grRefreshPromise=(async function(){
         try{
+          /* 成功したスコープで更新 (なければ wide を試みる) */
+          var scope=_grScope||GR_SCOPE_WIDE;
           var r=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
-            body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent('https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read offline_access')});
+            body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent(scope)});
           if(!r.ok){var ej=await r.json();throw Object.assign(new Error(r.status),{code:ej.error});}
           var t=await r.json();
           _grToken=t.access_token; _grExpiry=Date.now()+(t.expires_in-60)*1000;
           if(t.refresh_token) _refreshToken=t.refresh_token;
-          _authStatus.graph='ok'; _authStatus.graphError='';
+          _authStatus.graph='ok';
+          /* graphError は既存のまま (files: フォールバック状態を保持) */
           _updateDot();
           return _grToken;
         }catch(e){
-          /* ③ Graph 失敗: DV は維持、点を主観に */
           _authStatus.graph='error'; _authStatus.graphError=e.code||String(e);
           _updateDot();
           return null;
@@ -298,7 +319,24 @@ async function _getToken(type){
   throw new Error('unknown token type: '+type);
 }
 
-/* ── ⑤ テスト用: 만료 강제 (?debug=1 または sessionStorage 記録がある時のみ) ── */
+/* ── SharePoint 内部ヘルパー ── */
+function _spEnc(path){
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
+async function _spFetch(url, retry){
+  var tok=await _getToken('graph');
+  if(!tok) throw new Error('Graph token unavailable');
+  var res=await fetch(url,{headers:{Authorization:'Bearer '+tok}});
+  if(res.status===401&&!retry){
+    /* 401: トークン強制失効 → 1回だけ再取得 */
+    _grToken=null; _grExpiry=0;
+    return _spFetch(url,true);
+  }
+  return res;
+}
+
+/* ── テスト用: 万了強制 ── */
 function _isDebug(){
   try{
     if(new URL(location.href).searchParams.get('debug')==='1') return true;
@@ -318,6 +356,7 @@ function _showSplash(){
   if(app) app.style.display='none';
   _dvToken=null; _dvExpiry=0; _grToken=null; _grExpiry=0;
   _refreshToken=null; _dvRefreshPromise=null; _grRefreshPromise=null;
+  _grScope=null;
   _user=null;
   _authStatus={dataverse:'error',graph:_cfg.needGraph===false?'skip':'error',graphError:''};
 }
@@ -354,7 +393,6 @@ function _showApp(){
 async function _init(cfg){
   _cfg=Object.assign({needGraph:true},cfg);
   document.title='LEENAI '+_cfg.sys+' '+_cfg.name+' v'+_cfg.version;
-  /* ① debug=1 が URL にあれば sessionStorage に記録 (リダイレクト後も保持) */
   try{
     if(new URL(location.href).searchParams.get('debug')==='1')
       sessionStorage.setItem('leenai_debug_'+_cfg.sys,'1');
@@ -375,9 +413,9 @@ async function _init(cfg){
 function _logout(){
   _dvToken=null; _dvExpiry=0; _grToken=null; _grExpiry=0;
   _refreshToken=null; _dvRefreshPromise=null; _grRefreshPromise=null;
+  _grScope=null;
   _user=null;
   _authStatus={dataverse:'error',graph:_cfg.needGraph===false?'skip':'error',graphError:''};
-  /* ① debug フラグ削除 */
   try{sessionStorage.removeItem('leenai_debug_'+(_cfg.sys||''));}catch(e){}
   _showSplash();
 }
@@ -408,7 +446,40 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.5',
+  VERSION:'v1.6',
   _toggleTheme:_toggleTheme,
+  /* ── SharePoint 読み取り (v1.6) ── */
+  sp:{
+    getJson:async function(path){
+      var url=GRAPH_BASE+'drives/'+SP_DRIVE_ID+'/root:/'+_spEnc(path)+':/content';
+      var res=await _spFetch(url,false);
+      if(res.status===404) return null;
+      if(!res.ok) throw new Error('SP getJson '+res.status);
+      return res.json();
+    },
+    list:async function(folderPath){
+      var results=[];
+      var url=GRAPH_BASE+'drives/'+SP_DRIVE_ID+'/root:/'+_spEnc(folderPath)+':/children?$select=name,lastModifiedDateTime,size&$top=100';
+      while(url){
+        var res=await _spFetch(url,false);
+        if(!res.ok) throw new Error('SP list '+res.status);
+        var data=await res.json();
+        (data.value||[]).forEach(function(f){
+          if(f.name) results.push({name:f.name,lastModified:f.lastModifiedDateTime,size:f.size});
+        });
+        url=data['@odata.nextLink']||null;
+      }
+      return results;
+    },
+  },
+  SP:{
+    DRIVE_ID:SP_DRIVE_ID,
+    PATH:{
+      LC_JSON:[
+        '古紙/-. AI 活用/D-01-LC_FD_CHECKER',
+        '古紙/-. 古紙書類/▲ LC_LEENAI_JSON',
+      ],
+    },
+  },
 };
 })();
