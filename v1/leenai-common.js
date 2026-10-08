@@ -1,9 +1,10 @@
-/* LEENAI_COMMON v1.3 (2026-10-07) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.4 (2026-10-08) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
               v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
               v1.2 — バージョン番号修正 (v1.1 → v1.2)
-              v1.3 — refresh_token 保管・自動更新実装, 並行リフレッシュ排他, _expireForTest(?debug=1) */
+              v1.3 — refresh_token 保管・自動更新実装, 並行リフレッシュ排他, _expireForTest(?debug=1)
+              v1.4 — _expireForTest: ?debug=1 がリダイレクト後消えても sessionStorage で引き継ぐ。logout/showSplash で削除 */
 (function(){
 'use strict';
 
@@ -296,9 +297,15 @@ async function _getToken(type){
   throw new Error('unknown token type: '+type);
 }
 
-/* ── ⑤ テスト用: 만료 강제 (?debug=1 時のみ動作) ── */
+/* ── ⑤ テスト用: 만료 강제 (?debug=1 または sessionStorage 記録がある時のみ) ── */
+function _isDebug(){
+  try{
+    if(new URL(location.href).searchParams.get('debug')==='1') return true;
+    return sessionStorage.getItem('leenai_debug_'+(_cfg.sys||''))==='1';
+  }catch(e){return false;}
+}
 function _expireForTest(){
-  try{if(new URL(location.href).searchParams.get('debug')!=='1') return;}catch(e){return;}
+  if(!_isDebug()) return;
   _dvExpiry=0; _grExpiry=0;
 }
 
@@ -312,6 +319,8 @@ function _showSplash(){
   _refreshToken=null; _dvRefreshPromise=null; _grRefreshPromise=null;
   _user=null;
   _authStatus={dataverse:'error',graph:_cfg.needGraph===false?'skip':'error',graphError:''};
+  /* ① debug フラグ削除 */
+  try{sessionStorage.removeItem('leenai_debug_'+(_cfg.sys||''));}catch(e){}
 }
 
 function _showApp(){
@@ -346,6 +355,11 @@ function _showApp(){
 async function _init(cfg){
   _cfg=Object.assign({needGraph:true},cfg);
   document.title='LEENAI '+_cfg.sys+' '+_cfg.name+' v'+_cfg.version;
+  /* ① debug=1 が URL にあれば sessionStorage に記録 (リダイレクト後も保持) */
+  try{
+    if(new URL(location.href).searchParams.get('debug')==='1')
+      sessionStorage.setItem('leenai_debug_'+_cfg.sys,'1');
+  }catch(e){}
   Array.from(document.body.children).forEach(function(el){if(!el.id||el.id!=='ln-splash') el.style.display='none';});
   var th='dark'; try{th=localStorage.getItem('leenai_theme')||'dark';}catch(e){}
   _applyTheme(th);
@@ -364,6 +378,8 @@ function _logout(){
   _refreshToken=null; _dvRefreshPromise=null; _grRefreshPromise=null;
   _user=null;
   _authStatus={dataverse:'error',graph:_cfg.needGraph===false?'skip':'error',graphError:''};
+  /* ① debug フラグ削除 */
+  try{sessionStorage.removeItem('leenai_debug_'+(_cfg.sys||''));}catch(e){}
   _showSplash();
 }
 
@@ -393,7 +409,7 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.3',
+  VERSION:'v1.4',
   _toggleTheme:_toggleTheme,
 };
 })();
