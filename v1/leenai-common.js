@@ -1,10 +1,11 @@
-/* LEENAI_COMMON v1.4 (2026-10-08) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.5 (2026-10-08) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
               v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
               v1.2 — バージョン番号修正 (v1.1 → v1.2)
               v1.3 — refresh_token 保管・自動更新実装, 並行リフレッシュ排他, _expireForTest(?debug=1)
-              v1.4 — _expireForTest: ?debug=1 がリダイレクト後消えても sessionStorage で引き継ぐ。logout/showSplash で削除 */
+              v1.4 — _expireForTest: ?debug=1 がリダイレクト後消えても sessionStorage で引き継ぐ
+              v1.5 — v1.4 バグ修正: _showSplash での debug フラグ削除を廃止。削除は logout 時のみ */
 (function(){
 'use strict';
 
@@ -319,8 +320,6 @@ function _showSplash(){
   _refreshToken=null; _dvRefreshPromise=null; _grRefreshPromise=null;
   _user=null;
   _authStatus={dataverse:'error',graph:_cfg.needGraph===false?'skip':'error',graphError:''};
-  /* ① debug フラグ削除 */
-  try{sessionStorage.removeItem('leenai_debug_'+(_cfg.sys||''));}catch(e){}
 }
 
 function _showApp(){
@@ -409,7 +408,7 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.4',
+  VERSION:'v1.5',
   _toggleTheme:_toggleTheme,
 };
 })();
