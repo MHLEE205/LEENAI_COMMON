@@ -1,4 +1,4 @@
-/* LEENAI_COMMON v1.9 (2026-10-08) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.10 (2026-10-19) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
               v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
@@ -9,7 +9,8 @@
               v1.6 — Graph権限範囲拡大(Files.Read.All/ReadWrite, 失敗時 narrow スコープへフォールバック), SharePoint 読み取り関数(sp.getJson/list)
               v1.7 — redirectUri オプション追加(init), onLogout フック追加
               v1.8 — Graph スコープを 3 段階化 (Mail.ReadWrite 付き → WIDE → NARROW)
-              v1.9 — 공통 마스터 (LEENAI.master.get/find/list, ⚙ マスター設定 패널, 충돌·입력 검사, 변경 기록 50건) */
+              v1.9 — 공통 마스터 (LEENAI.master.get/find/list, ⚙ マスター設定 패널, 충돌·입력 검사, 변경 기록 50건)
+              v1.10 — 마스터 칸 종류 ref 추가 (다른 마스터에서 고르는 드롭다운: ref·ref_key·ref_label, 在籍 해제는 목록 제외), LEENAI.master.label() */
 (function(){
 'use strict';
 
@@ -487,6 +488,52 @@ async function _masterGet(name,opts){
   }
 }
 
+/* ── ref 칸 (v1.10) — 다른 마스터에서 고르는 드롭다운
+   field 예: {key:'staff',label:'担当',type:'ref',ref:'staff',ref_key:'code',ref_label:'name_ja'}
+   값은 ref_key (예: M_TAKEUCHI) 로 저장, 화면에는 ref_label (예: 竹内 雅将). 在籍(active)=false 는 선택지에서 제외 ── */
+async function _masterLoadRefs(fields){
+  for(var i=0;i<(fields||[]).length;i++){
+    var f=fields[i];
+    if(f.type==='ref'&&f.ref&&!_masterCache[f.ref]){try{await _masterGet(f.ref);}catch(e){}}
+  }
+}
+
+function _masterRefItems(f){
+  var c=_masterCache[f.ref]; return (c&&c.doc&&c.doc.items)||[];
+}
+
+function _masterRefItem(f,v){
+  var k=f.ref_key||'code';
+  return _masterRefItems(f).find(function(r){return String(r[k]||'')===String(v||'');})||null;
+}
+
+function _masterRefLabel(f,v){
+  if(!v) return '';
+  var it=_masterRefItem(f,v);
+  return it?String(it[f.ref_label||f.ref_key||'code']||v):String(v);
+}
+
+function _masterRefSelect(f,v,ri){
+  var k=f.ref_key||'code', lb=f.ref_label||k;
+  var opts='<option value=""></option>', found=false;
+  _masterRefItems(f).forEach(function(r){
+    var val=String(r[k]||''); if(!val) return;
+    var cur=val===String(v||'');
+    if(r.active===false&&!cur) return;
+    if(cur) found=true;
+    opts+='<option value="'+_mEsc(val)+'"'+(cur?' selected':'')+'>'+_mEsc(String(r[lb]||val))+(r.active===false?' (退職)':'')+'</option>';
+  });
+  if(v&&!found) opts+='<option value="'+_mEsc(v)+'" selected>⚠ '+_mEsc(v)+'</option>';
+  return '<select class="ln-master-cell-input" data-ri="'+ri+'" data-key="'+f.key+'" onchange="LEENAI._masterCellChange(this)">'+opts+'</select>';
+}
+
+/* 공개: LEENAI.master.label('pol_staff','staff','M_TAKEUCHI') → '竹内 雅将' (마스터를 get 한 뒤 사용) */
+function _masterLabel(name,key,v){
+  var c=_masterCache[name]; if(!c) return v||'';
+  var f=(c.doc.fields||[]).find(function(x){return x.key===key;});
+  return f&&f.type==='ref'?_masterRefLabel(f,v):(v||'');
+}
+
 function _masterFind(name,filter){
   if(!_masterCache[name]) return null;
   var items=_masterCache[name].doc.items;
@@ -588,6 +635,7 @@ async function _renderMasterTable(name){
     if(!_masterCache[name]) await _masterGet(name,{fresh:true});
     var doc=_masterCache[name].doc;
     var fields=doc.fields;
+    await _masterLoadRefs(fields);
     if(!_masterDraft[name]) _masterDraft[name]={orig:JSON.parse(JSON.stringify(doc.items)),rows:JSON.parse(JSON.stringify(doc.items)),deleted:[],added:[]};
     var draft=_masterDraft[name];
     var ro=_masterIsReadonly();
@@ -625,7 +673,7 @@ function _masterRenderRows(name,fields,rows,ro){
   tbody.innerHTML='';
   rows.forEach(function(row,ri){
     if(search){
-      var match=fields.some(function(f){return String(row[f.key]||'').toLowerCase().includes(search.toLowerCase());});
+      var match=fields.some(function(f){var sv=String(row[f.key]||'')+(f.type==='ref'?' '+_masterRefLabel(f,row[f.key]):'');return sv.toLowerCase().includes(search.toLowerCase());});
       if(!match) return;
     }
     var isNew=draft.added.indexOf(row)>=0;
@@ -636,7 +684,8 @@ function _masterRenderRows(name,fields,rows,ro){
     var cells='';
     fields.forEach(function(f){
       var v=row[f.key]!=null?String(row[f.key]):'';
-      if(ro||isDel){cells+='<td>'+_mEsc(v)+'</td>';}
+      if(ro||isDel){cells+='<td>'+_mEsc(f.type==='ref'?_masterRefLabel(f,v):v)+'</td>';}
+      else if(f.type==='ref'){cells+='<td>'+_masterRefSelect(f,v,ri)+'</td>';}
       else if(f.type==='bool'){cells+='<td><input type="checkbox"'+(v==='true'||v===true?' checked':'')
         +' data-ri="'+ri+'" data-key="'+f.key+'" onchange="LEENAI._masterCellChange(this)"></td>';}
       else{cells+='<td><input class="ln-master-cell-input" type="text" value="'+_mEsc(v)+'" data-ri="'+ri+'" data-key="'+f.key+'" oninput="LEENAI._masterCellChange(this)"></td>';}
@@ -742,6 +791,7 @@ async function _masterSave(){
       if(f.required&&!v){errors.push(f.label+': 必須項目です');}
       if(v&&f.type==='email'){if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) errors.push(f.label+': メール形式エラー ('+v+')');}
       if(v&&f.type==='emails'){v.split(/[;,\/\s]+/).filter(Boolean).forEach(function(a){if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a.trim())) errors.push(f.label+': メール形式 ('+a.trim()+')');});}
+      if(v&&f.type==='ref'&&!_masterRefItem(f,v)){errors.push(f.label+': マスターにない値 ('+v+')');}
       if(v&&f.type==='emails_or_fax'){v.split(/[;,\/\s]+/).filter(Boolean).forEach(function(a){if(a.trim()!=='FAX'&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a.trim())) errors.push(f.label+': メールかFAX ('+a.trim()+')');});}
     });
   });
@@ -804,7 +854,7 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.9',
+  VERSION:'v1.10',
   _toggleTheme:_toggleTheme,
   _openMasterPanel:_openMasterPanel,
   _masterTabSwitch:_masterTabSwitch,
@@ -822,6 +872,7 @@ window.LEENAI={
     get:_masterGet,
     find:_masterFind,
     list:_masterList,
+    label:_masterLabel,
   },
   /* ── SharePoint 読み取り (v1.6) ── */
   sp:{
