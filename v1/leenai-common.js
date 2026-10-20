@@ -1,4 +1,4 @@
-/* LEENAI_COMMON v1.10 (2026-10-19) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.11 (2026-10-20) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
               v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
@@ -10,7 +10,9 @@
               v1.7 — redirectUri オプション追加(init), onLogout フック追加
               v1.8 — Graph スコープを 3 段階化 (Mail.ReadWrite 付き → WIDE → NARROW)
               v1.9 — 공통 마스터 (LEENAI.master.get/find/list, ⚙ マスター設定 패널, 충돌·입력 검사, 변경 기록 50건)
-              v1.10 — 마스터 칸 종류 ref 추가 (다른 마스터에서 고르는 드롭다운: ref·ref_key·ref_label, 在籍 해제는 목록 제외), LEENAI.master.label() */
+              v1.10 — 마스터 칸 종류 ref 추가 (다른 마스터에서 고르는 드롭다운: ref·ref_key·ref_label, 在籍 해제는 목록 제외), LEENAI.master.label()
+              v1.11 — init 옵션 graphScopes (추가 Graph 권한 — 예: ['Sites.ReadWrite.All']). 지정한 TOOL 만 로그인 시 동의 요청 +
+                      「Mail.ReadWrite 묶음 + 추가 권한」 을 먼저 시도, 실패하면 기존 3 단계로 (auth.status.graphExtra 에 결과). 미지정 TOOL 은 동작 불변 */
 (function(){
 'use strict';
 
@@ -170,6 +172,17 @@ function _updateDot(){
   else dot.style.background='var(--danger)';
 }
 
+/* ── v1.11: 추가 Graph 권한 (init 옵션 graphScopes) — 지정 없으면 '' ── */
+function _extraGraphScopes(){
+  var a=_cfg&&_cfg.graphScopes;
+  if(!a||!a.length) return '';
+  return a.map(function(x){x=String(x).trim();return /^https?:\/\//.test(x)?x:'https://graph.microsoft.com/'+x;}).join(' ');
+}
+
+function _mergeScopes(a,b){ /* 중복 제거한 합집합 (순서 유지) */
+  var out=[];(a+' '+b).split(/\s+/).forEach(function(x){if(x&&out.indexOf(x)<0)out.push(x);});return out.join(' ');
+}
+
 /* ── ログイン (PKCE) ── */
 async function _startLogin(){
   var verifier=randomStr(64);
@@ -178,7 +191,9 @@ async function _startLogin(){
   var pkceKey='leenai_pkce_'+_cfg.sys;
   try{sessionStorage.setItem(pkceKey,JSON.stringify({verifier:verifier,state:state}));}catch(e){}
   var rdUri=_cfg.redirectUri||(location.origin+location.pathname.replace(/index\.html$/,''));
-  var scope=encodeURIComponent(DV_URL+'/user_impersonation openid profile email offline_access');
+  var _ex=_extraGraphScopes();
+  /* v1.11: 추가 권한이 있으면 로그인 때 함께 동의 요청 (토큰은 아래에서 리소스별로 따로 받는다) */
+  var scope=encodeURIComponent(DV_URL+'/user_impersonation openid profile email offline_access'+(_ex?' '+_ex:''));
   var params='client_id='+CLIENT_ID+'&response_type=code&redirect_uri='+encodeURIComponent(rdUri)+'&scope='+scope+'&code_challenge='+challenge+'&code_challenge_method=S256&state='+state+'&prompt=select_account';
   location.href=AUTH_URL+'/authorize?'+params;
 }
@@ -224,7 +239,15 @@ async function _handleCallback(){
       _updateLoading('Outlook 接続中…');
       /* v1.8: 3 段階 — ① Mail.ReadWrite 付き → ② WIDE → ③ NARROW (②③ は従来どおり) */
       var _grTier=GR_SCOPE_MAIL;
-      var r2w=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      var r2w=null, _ex2=_extraGraphScopes();
+      if(_ex2){
+        /* v1.11: ⓪ Mail.ReadWrite 묶음 + 추가 권한 — 실패하면 기존 ①②③ 그대로 */
+        r2w=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+          body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent(_mergeScopes(GR_SCOPE_MAIL,_ex2))});
+        if(r2w.ok){_grTier=_mergeScopes(GR_SCOPE_MAIL,_ex2);_authStatus.graphExtra='ok';}
+        else {var _ejx={};try{_ejx=await r2w.json();}catch(e){} _authStatus.graphExtra='error:'+(_ejx.error||r2w.status);r2w=null;}
+      }
+      if(!r2w) r2w=await fetch(AUTH_URL+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
         body:'client_id='+CLIENT_ID+'&grant_type=refresh_token&refresh_token='+encodeURIComponent(_refreshToken)+'&scope='+encodeURIComponent(GR_SCOPE_MAIL)});
       if(!r2w.ok){
         _grTier=GR_SCOPE_WIDE;
@@ -854,7 +877,7 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.10',
+  VERSION:'v1.11',
   _toggleTheme:_toggleTheme,
   _openMasterPanel:_openMasterPanel,
   _masterTabSwitch:_masterTabSwitch,
