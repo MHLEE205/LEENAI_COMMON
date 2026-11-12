@@ -1,4 +1,4 @@
-/* LEENAI_COMMON v1.11 (2026-10-20) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.12 (2026-11-12) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
               v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
@@ -12,7 +12,9 @@
               v1.9 — 공통 마스터 (LEENAI.master.get/find/list, ⚙ マスター設定 패널, 충돌·입력 검사, 변경 기록 50건)
               v1.10 — 마스터 칸 종류 ref 추가 (다른 마스터에서 고르는 드롭다운: ref·ref_key·ref_label, 在籍 해제는 목록 제외), LEENAI.master.label()
               v1.11 — init 옵션 graphScopes (추가 Graph 권한 — 예: ['Sites.ReadWrite.All']). 지정한 TOOL 만 로그인 시 동의 요청 +
-                      「Mail.ReadWrite 묶음 + 추가 권한」 을 먼저 시도, 실패하면 기존 3 단계로 (auth.status.graphExtra 에 결과). 미지정 TOOL 은 동작 불변 */
+                      「Mail.ReadWrite 묶음 + 추가 권한」 을 먼저 시도, 실패하면 기존 3 단계로 (auth.status.graphExtra 에 결과). 미지정 TOOL 은 동작 불변
+               v1.12 — LEENAI.master.upsert(name, key, row, opts) 추가 — TOOL 에서 마스터 1 행을 추가/수정 (⚙ 저장과 같은 eTag 충돌 검사, 변경 기록 50건,
+                       충돌 시 1 회 다시 읽고 재시도, opts.maxAgeDays + dateField 로 오래된 행 정리). 기존 기능은 변경 없음 (B-03 v3.11 国内転売 입력용) */
 (function(){
 'use strict';
 
@@ -563,6 +565,58 @@ function _masterFind(name,filter){
   return items.find(function(row){return Object.keys(filter).every(function(k){return String(row[k]||'')===String(filter[k]||'');});}) || null;
 }
 
+/* ── マスター 1 行保存 (v1.12) ──
+   TOOL から 1 行だけ追加・更新する。⚙ 画面と同じ安全装置 (eTag 競合検査・変更記録 50 件)。
+   name : マスター名 (MASTER/master_{name}.json が既にあること — 新しいマスターは §9-2 の手順で先に作る)
+   key  : 一意キーのオブジェクト (例 {bkg_no:'ABC123'}) — 一致する行を置き換え、なければ追加
+   row  : 保存する行
+   opts.maxAgeDays + opts.dateField : 保存時、dateField が maxAgeDays より古い行を削除 (日付が読めない行は残す)
+   opts.summary : 変更記録の要約 (省略時「追加 1件」/「修正 1件」)
+   戻り値 {action:'追加'|'修正', pruned:削除件数, items:保存後の全行} */
+async function _masterUpsert(name,key,row,opts){
+  opts=opts||{};
+  var keys=Object.keys(key||{});
+  if(!name||!keys.length) throw new Error('upsert: name と key が必要です');
+  var url=GRAPH_BASE+'drives/'+SP_DRIVE_ID+'/root:/'+_spEnc(MASTER_PATH+'/master_'+name+'.json')+':/content';
+  for(var attempt=0;attempt<2;attempt++){
+    var res=await _spFetch(url,false);
+    if(res.status===404) throw new Error('マスター master_'+name+'.json がありません');
+    if(!res.ok) throw new Error('SP master '+res.status);
+    var eTag=res.headers.get('ETag')||res.headers.get('etag')||'';
+    var doc=await res.json();
+    var items=Array.isArray(doc.items)?doc.items.slice():[];
+    var same=function(r){return keys.every(function(k){return String(r[k]||'')===String(key[k]||'');});};
+    var idx=items.findIndex(same);
+    var newRow=Object.assign({},row); keys.forEach(function(k){newRow[k]=key[k];});
+    var action=idx>=0?'修正':'追加';
+    if(idx>=0) items[idx]=newRow; else items.push(newRow);
+    var pruned=0;
+    if(opts.maxAgeDays&&opts.dateField){
+      var limit=Date.now()-opts.maxAgeDays*86400000;
+      var kept=items.filter(function(r){var t=Date.parse(r[opts.dateField]||''); return isNaN(t)||t>=limit;});
+      pruned=items.length-kept.length; items=kept;
+    }
+    doc.items=items;
+    doc.updated_at=new Date().toLocaleString('sv',{timeZone:'Asia/Tokyo'}).replace(' ','T')+'+09:00';
+    doc.updated_by=(_user&&_user.name)||'?';
+    if(!doc.history) doc.history=[];
+    doc.history.unshift({at:doc.updated_at,by:doc.updated_by,summary:(opts.summary||(action+' 1件'))+(pruned?' / 期限切れ削除 '+pruned+'件':'')});
+    if(doc.history.length>50) doc.history=doc.history.slice(0,50);
+    var tok=await _getToken('graph');
+    if(!tok) throw new Error('Graph トークンがありません');
+    var hdrs={Authorization:'Bearer '+tok,'Content-Type':'application/json'};
+    if(eTag) hdrs['If-Match']=eTag;
+    var put=await fetch(url,{method:'PUT',headers:hdrs,body:JSON.stringify(doc,null,2)});
+    if(put.status===412) continue;   /* 他の人が先に保存 → 読み直してもう一度 (1 回だけ) */
+    if(!put.ok) throw new Error('PUT '+put.status);
+    var saved={}; try{saved=await put.json();}catch(e1){}
+    _masterCache[name]={doc:doc,eTag:saved['@odata.etag']||put.headers.get('ETag')||'',webUrl:(_masterCache[name]&&_masterCache[name].webUrl)||null};
+    try{localStorage.setItem('leenai_master_'+name,JSON.stringify(doc));}catch(e2){}
+    return {action:action,pruned:pruned,items:doc.items};
+  }
+  throw new Error('他の人が同時に保存しました。もう一度保存してください');
+}
+
 async function _masterList(){
   var files=await LEENAI.sp.list(MASTER_PATH);
   var masters=files.filter(function(f){return /^master_[a-z_]+\.json$/.test(f.name);});
@@ -877,7 +931,7 @@ window.LEENAI={
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
   COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.11',
+  VERSION:'v1.12',
   _toggleTheme:_toggleTheme,
   _openMasterPanel:_openMasterPanel,
   _masterTabSwitch:_masterTabSwitch,
@@ -896,6 +950,7 @@ window.LEENAI={
     find:_masterFind,
     list:_masterList,
     label:_masterLabel,
+    upsert:_masterUpsert,   /* v1.12 */
   },
   /* ── SharePoint 読み取り (v1.6) ── */
   sp:{
