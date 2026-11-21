@@ -1,4 +1,4 @@
-/* LEENAI_COMMON v1.12 (2026-11-12) — DOC-Z-05 v1.0
+/* LEENAI_COMMON v1.13 (2026-11-21) — DOC-Z-05 v1.0
    window.LEENAI を 1 つだけ公開。他のグローバル変数は作らない。
    ChangeLog: v1.0 — 新規
               v1.1 — id_token UTF-8デコード修正(TextDecoder), staffCode をメール prefix 基準に変更, 未登録者は空文字
@@ -14,7 +14,8 @@
               v1.11 — init 옵션 graphScopes (추가 Graph 권한 — 예: ['Sites.ReadWrite.All']). 지정한 TOOL 만 로그인 시 동의 요청 +
                       「Mail.ReadWrite 묶음 + 추가 권한」 을 먼저 시도, 실패하면 기존 3 단계로 (auth.status.graphExtra 에 결과). 미지정 TOOL 은 동작 불변
                v1.12 — LEENAI.master.upsert(name, key, row, opts) 추가 — TOOL 에서 마스터 1 행을 추가/수정 (⚙ 저장과 같은 eTag 충돌 검사, 변경 기록 50건,
-                       충돌 시 1 회 다시 읽고 재시도, opts.maxAgeDays + dateField 로 오래된 행 정리). 기존 기능은 변경 없음 (B-03 v3.11 国内転売 입력용) */
+                       충돌 시 1 회 다시 읽고 재시도, opts.maxAgeDays + dateField 로 오래된 행 정리). 기존 기능은 변경 없음 (B-03 v3.11 国内転売 입력용)
+               v1.13 — DV_URL·COMPANY.name_en/addr_en·SP.PATH.PHOTO_V2/RR_READ 추가 (D-02 v7.0) */
 (function(){
 'use strict';
 
@@ -930,8 +931,11 @@ window.LEENAI={
   toast:_toast,
   addHeaderButton:_addHeaderButton,
   STAFF:DEFAULT_STAFF,
-  COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851'},
-  VERSION:'v1.12',
+  DV_URL:DV_URL,                                   /* v1.13 — TOOL 이 COMPASS 주소를 하드코딩하지 않게 */
+  COMPANY:{tel:'+81-3-3528-9850',fax:'+81-3-3528-9851',
+    name_en:'LEENEAR CORPORATION',
+    addr_en:'VORT SUIDOBASHI3 5FL, 2-8-11 KANDASARUGAKUCHO, CHIYODA, TOKYO, JAPAN, 101-0064'},   /* v1.13 name_en·addr_en 추가 */
+  VERSION:'v1.13',
   _toggleTheme:_toggleTheme,
   _openMasterPanel:_openMasterPanel,
   _masterTabSwitch:_masterTabSwitch,
@@ -984,6 +988,8 @@ window.LEENAI={
         '古紙/-. 古紙書類/▲ LC_LEENAI_JSON',
       ],
       MASTER:MASTER_PATH,
+      PHOTO_V2:'古紙/-. 古紙書類/▲ LEENAI 通関作業中/PHOTO_V2',   /* v1.13 */
+      RR_READ:'古紙/-. 古紙書類/▲ LEENAI 通関作業中/RR_READ',     /* v1.13 — D-02 엔진 판독 결과 */
     },
   },
 };
